@@ -1,0 +1,46 @@
+{
+    "meta": {
+        "name": "Smart Pause",
+        "description": "Pause Safe Eyes if the system is idle",
+        "version": "0.0.4"
+    },
+    "dependencies": {
+        "python_modules": [],
+        "shell_commands": [],
+        "operating_systems": [],
+        "desktop_environments": [],
+        "resources": []
+    },
+    "settings": [
+        {
+            "id": "idle_time",
+            "label": "Minimum idle time to pause Safe Eyes (in seconds)",
+            "type": "INT",
+            "default": 5,
+            "max": 3600,
+            "min": 5
+        },
+        {
+            "id": "postpone_if_active",
+            "label": "Postpone the next break until the system becomes idle",
+            "type": "BOOL",
+            "default": false
+        },
+        {
+            "id": "pre_break_postpone_idle_time",
+            "label": "忙碌判定阈值（空闲少于此秒数视为忙碌）",
+            "type": "INT",
+            "default": 2,
+            "min": 1,
+            "max": 60
+        },
+        {
+            "id": "postpone_duration",
+            "label": "每次顺延时长（秒）",
+            "type": "INT",
+            "default": 120,
+            "min": 30,
+            "max": 3600
+        }
+    ]
+}
