@@ -176,30 +176,77 @@ class SettingsDialog(Gtk.ApplicationWindow):
     @Gtk.Template.Callback()
     def on_reset_menu_clicked(self, button: Gtk.Button) -> None:
         self.popover.hide()
-
-        def __confirmation_dialog_response(dialog, result) -> None:
-            response_id = dialog.choose_finish(result)
-            if response_id == 1:
-                self.config = Config.reset_config()
-                # Remove breaks from the container
-                self.__clear_children(self.box_short_breaks)
-                self.__clear_children(self.box_long_breaks)
-                self.__clear_children(self.box_plugins)
-                # Initialize again
-                self.__initialize(self.config)
-
-        messagedialog = Gtk.AlertDialog()
-        messagedialog.set_modal(True)
-        messagedialog.set_buttons(["_Cancel", _("Reset")])
-        messagedialog.set_message(
-            _("Are you sure you want to reset all settings to default?")
+        self.__confirm_dialog(
+            _("Reset settings"),
+            _("Are you sure you want to reset all settings to default?"),
+            _("Reset"),
+            self.__reset_config,
         )
-        messagedialog.set_detail(_("You can't undo this action."))
 
-        messagedialog.set_cancel_button(0)
-        messagedialog.set_default_button(0)
+    def __reset_config(self) -> None:
+        self.config = Config.reset_config()
+        # Remove breaks from the container
+        self.__clear_children(self.box_short_breaks)
+        self.__clear_children(self.box_long_breaks)
+        self.__clear_children(self.box_plugins)
+        # Initialize again
+        self.__initialize(self.config)
 
-        messagedialog.choose(self, None, __confirmation_dialog_response)
+    def __confirm_dialog(
+        self, title: str, message: str, ok_label: str, on_confirm
+    ) -> None:
+        """Show a modal confirmation dialog.
+
+        GTK >= 4.10 使用 Gtk.AlertDialog；GTK < 4.10（Ubuntu 22.04 为 4.6）
+        无该 API，回退为 Gtk.Window 自建模态确认框。
+        """
+
+        if hasattr(Gtk, "AlertDialog"):
+
+            def __response(dialog, result) -> None:
+                if dialog.choose_finish(result) == 1:
+                    on_confirm()
+
+            dialog = Gtk.AlertDialog()
+            dialog.set_modal(True)
+            dialog.set_buttons(["_Cancel", ok_label])
+            dialog.set_message(message)
+            dialog.set_detail(_("You can't undo this action."))
+            dialog.set_cancel_button(0)
+            dialog.set_default_button(0)
+            dialog.choose(self, None, __response)
+            return
+
+        dialog = Gtk.Window(transient_for=self, modal=True)
+        dialog.set_title(title)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        box.set_margin_top(20)
+        box.set_margin_bottom(20)
+        box.set_margin_start(20)
+        box.set_margin_end(20)
+        box.set_size_request(360, -1)
+        label = Gtk.Label(label=message)
+        label.set_wrap(True)
+        label.set_halign(Gtk.Align.START)
+        box.append(label)
+        detail = Gtk.Label(label=_("You can't undo this action."))
+        detail.set_halign(Gtk.Align.START)
+        detail.add_css_class("dim-label")
+        box.append(detail)
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_box.set_halign(Gtk.Align.END)
+        cancel_btn = Gtk.Button(label="_Cancel")
+        ok_btn = Gtk.Button(label=ok_label)
+        ok_btn.add_css_class("destructive-action")
+        cancel_btn.connect("clicked", lambda b: dialog.close())
+        ok_btn.connect(
+            "clicked", lambda b: (on_confirm(), dialog.close())
+        )
+        btn_box.append(cancel_btn)
+        btn_box.append(ok_btn)
+        box.append(btn_box)
+        dialog.set_child(box)
+        dialog.present()
 
     def __clear_children(self, widget: Gtk.Box) -> None:
         while (child := widget.get_last_child()) is not None:
@@ -210,25 +257,19 @@ class SettingsDialog(Gtk.ApplicationWindow):
     ) -> None:
         """Remove the break after a confirmation."""
 
-        def __confirmation_dialog_response(dialog, result) -> None:
-            response_id = dialog.choose_finish(result)
-            if response_id == 1:
-                if is_short:
-                    self.config.get("short_breaks").remove(break_config)
-                else:
-                    self.config.get("long_breaks").remove(break_config)
-                on_remove()
+        def __remove_break() -> None:
+            if is_short:
+                self.config.get("short_breaks").remove(break_config)
+            else:
+                self.config.get("long_breaks").remove(break_config)
+            on_remove()
 
-        messagedialog = Gtk.AlertDialog()
-        messagedialog.set_modal(True)
-        messagedialog.set_buttons(["_Cancel", _("Delete")])
-        messagedialog.set_message(_("Are you sure you want to delete this break?"))
-        messagedialog.set_detail(_("You can't undo this action."))
-
-        messagedialog.set_cancel_button(0)
-        messagedialog.set_default_button(0)
-
-        messagedialog.choose(self, None, __confirmation_dialog_response)
+        self.__confirm_dialog(
+            _("Delete break"),
+            _("Are you sure you want to delete this break?"),
+            _("Delete"),
+            __remove_break,
+        )
 
     def __create_plugin_item(self, plugin_config: dict) -> "PluginItem":
         """Create an entry for plugin to be listed in the plugin tab."""
