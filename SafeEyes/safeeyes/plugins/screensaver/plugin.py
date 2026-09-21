@@ -27,7 +27,9 @@ import typing
 import gi
 
 gi.require_version("Gio", "2.0")
+gi.require_version("GLib", "2.0")
 from gi.repository import Gio
+from gi.repository import GLib
 
 from safeeyes import utility
 from safeeyes.model import TrayAction
@@ -120,17 +122,25 @@ def __lock_screen_command() -> typing.Union[list[str], typing.Callable[[], None]
 
 
 def __lock_screen_dbus(destination: str, path: str, method: str) -> None:
-    """This assumes that the interface is the same as the destination."""
-    dbus_proxy = Gio.DBusProxy.new_for_bus_sync(
-        bus_type=Gio.BusType.SESSION,
-        flags=Gio.DBusProxyFlags.DO_NOT_LOAD_PROPERTIES,
-        info=None,
-        name=destination,
-        object_path=path,
-        interface_name=destination,
-    )
+    """This assumes that the interface is the same as the destination.
 
-    dbus_proxy.call_sync(method, None, Gio.DBusCallFlags.NONE, -1)
+    环境适配：DBus 锁屏调用带较短超时（5 秒）并捕获异常。
+    若 GNOME Shell 未响应，锁屏失败不应抛错打断 SafeEyes 的调度链。
+    """
+
+    try:
+        dbus_proxy = Gio.DBusProxy.new_for_bus_sync(
+            bus_type=Gio.BusType.SESSION,
+            flags=Gio.DBusProxyFlags.DO_NOT_LOAD_PROPERTIES,
+            info=None,
+            name=destination,
+            object_path=path,
+            interface_name=destination,
+        )
+
+        dbus_proxy.call_sync(method, None, Gio.DBusCallFlags.NONE, 5000)
+    except GLib.Error as error:
+        logging.warning("Failed to lock the screen: %s", error.message)
 
 
 def __lock_screen_later():

@@ -20,6 +20,7 @@
 your eyes from eye strain.
 """
 
+import faulthandler
 import signal
 import sys
 import typing
@@ -33,6 +34,10 @@ gi.require_version("GLib", "2.0")
 from gi.repository import GLib
 
 safe_eyes: typing.Optional[SafeEyes] = None
+
+# 调试辅助：应用卡住时执行 `kill -USR1 <pid>` 可将各线程栈
+# 转储到 stderr，便于定位死锁（仅在 fork 定制版启用）
+faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 
 def main() -> None:
