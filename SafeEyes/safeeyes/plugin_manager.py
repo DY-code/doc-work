@@ -190,6 +190,16 @@ class PluginManager:
         for plugin in self.__plugins.values():
             plugin.call_plugin_method("on_stop")
 
+    def activity_pause(self) -> None:
+        """Notify an automatic pause without disabling active plugins."""
+        for plugin in self.__plugins.values():
+            plugin.call_plugin_method("on_activity_pause")
+
+    def activity_resume(self) -> None:
+        """Notify the end of an automatic pause."""
+        for plugin in self.__plugins.values():
+            plugin.call_plugin_method("on_activity_resume")
+
     def exit(self) -> None:
         """Execute the on_exit() function of plugins."""
         for plugin in self.__plugins.values():

@@ -92,6 +92,19 @@ def on_stop():
         start_time = None
 
 
+def on_activity_pause():
+    """Exclude suspended, locked, blanked, and idle time from screen time."""
+    on_stop()
+
+
+def on_activity_resume():
+    """A partially completed break is still rest rather than screen time."""
+    from safeeyes.model import State
+
+    if context["state"] != State.BREAK:
+        on_start()
+
+
 def get_widget_title(break_obj):
     """Return the widget title."""
     return _("Health Statistics")

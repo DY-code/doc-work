@@ -34,13 +34,9 @@ Safe Eyes smart pause plugin
 
 context: Context
 idle_time: float = 0
-enable_safeeyes = None
-disable_safeeyes = None
 postpone: typing.Optional[typing.Callable[[int], None]] = None
 smart_pause_activated = False
 idle_start_time: typing.Optional[datetime.datetime] = None
-next_break_time: typing.Optional[datetime.datetime] = None
-short_break_interval: int = 0
 postpone_if_active: bool = False
 
 is_wayland_and_gnome = False
@@ -62,38 +58,24 @@ def _on_idle() -> None:
     global smart_pause_activated
     global idle_start_time
 
-    if context["state"] == State.WAITING:
+    if context["state"] == State.WAITING or context.get("automatic_pause", False):
         smart_pause_activated = True
         idle_start_time = datetime.datetime.now() - datetime.timedelta(
             seconds=idle_time
         )
         logging.info("Pause Safe Eyes due to system idle")
-        disable_safeeyes(None, True)  # type: ignore[misc]
+        context.api.set_idle(True, idle_time)
 
 
 def _on_resumed() -> None:
     global smart_pause_activated
     global idle_start_time
 
-    if context["state"] == State.RESTING and idle_start_time is not None:
+    if smart_pause_activated:
         logging.info("Resume Safe Eyes due to user activity")
         smart_pause_activated = False
-        idle_period = datetime.datetime.now() - idle_start_time
-        idle_seconds = idle_period.total_seconds()
-        context["idle_period"] = idle_seconds
-        if idle_seconds < short_break_interval:
-            # Credit back the idle time
-            if next_break_time is not None:
-                # This method runs in a thread since the start.
-                # It may run before next_break is initialized in the
-                # update_next_break method
-                next_break = next_break_time + idle_period
-                enable_safeeyes(next_break.timestamp())  # type: ignore[misc]
-            else:
-                enable_safeeyes()  # type: ignore[misc]
-        else:
-            # User is idle for more than the time between two breaks
-            enable_safeeyes()  # type: ignore[misc]
+        idle_start_time = None
+        context.api.set_idle(False)
 
 
 def _on_idle_pre_break() -> None:
@@ -115,11 +97,8 @@ def _on_resumed_pre_break() -> None:
 def init(ctx, safeeyes_config, plugin_config) -> None:
     """Initialize the plugin."""
     global context
-    global enable_safeeyes
-    global disable_safeeyes
     global postpone
     global idle_time
-    global short_break_interval
     global postpone_if_active
     global postpone_duration
     global pre_break_postpone_idle_time
@@ -128,16 +107,11 @@ def init(ctx, safeeyes_config, plugin_config) -> None:
     global use_ext_idle_notify
     logging.debug("Initialize Smart Pause plugin")
     context = ctx
-    enable_safeeyes = context["api"]["enable_safeeyes"]
-    disable_safeeyes = context["api"]["disable_safeeyes"]
     postpone = context["api"]["postpone"]
     idle_time = plugin_config["idle_time"]
     postpone_if_active = plugin_config["postpone_if_active"]
     postpone_duration = plugin_config["postpone_duration"]
     pre_break_postpone_idle_time = plugin_config["pre_break_postpone_idle_time"]
-    short_break_interval = (
-        safeeyes_config.get("short_break_interval") * 60
-    )  # Convert to seconds
     is_wayland_and_gnome = context["desktop"] == "gnome" and context["is_wayland"]
     use_swayidle = context["desktop"] == "sway"
     use_ext_idle_notify = (
@@ -199,21 +173,12 @@ def on_stop() -> None:
     global idle_monitor
     global smart_pause_activated
 
-    if smart_pause_activated:
-        # Safe Eyes is stopped due to system idle
-        smart_pause_activated = False
-        return
+    smart_pause_activated = False
     logging.debug("Stop Smart Pause plugin")
 
     if idle_monitor is not None:
         if idle_monitor.is_monitor_running():
             idle_monitor.stop_monitor()
-
-
-def update_next_break(break_obj, dateTime) -> None:
-    """Update the next break time."""
-    global next_break_time
-    next_break_time = dateTime
 
 
 def on_pre_break(break_obj) -> None:
@@ -283,6 +248,10 @@ def on_stop_break() -> None:
 def disable() -> None:
     """SmartPause plugin was active earlier but now user has disabled it."""
     global idle_monitor
+    global smart_pause_activated
+
+    smart_pause_activated = False
+    context.api.set_idle(False)
 
     # Remove the idle_period
     context.pop("idle_period", None)

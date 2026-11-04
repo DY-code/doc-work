@@ -41,6 +41,21 @@ Application Options:
   --version                  show program's version number and exit
 ```
 
+## Automatic pauses in this checkout
+
+On GNOME with X11, working time pauses during system suspend/hibernation,
+screen locking, and display power saving. It resumes with the remaining time
+only after all pause conditions have cleared. Display power is checked once
+per second. This works even when the Smart Pause plugin is disabled.
+
+Time spent away counts toward a break already in progress. On the first resume
+or application start on a new local calendar day, a full work interval starts
+with a fresh break queue. Continuous use through midnight does not reset it.
+Smart Pause retains its short/long idle rules when no system pause is involved,
+and manual disabling takes precedence over automatic resume.
+
+These changes take effect after restarting Safe Eyes from this checkout.
+
 ## Installation guide
 
 Safe Eyes is available on the official repositories of many popular the distributions.

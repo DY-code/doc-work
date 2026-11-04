@@ -567,6 +567,9 @@ class TrayIcon:
                 else:
                     info_message = _("Disabled until restart")
 
+        if self.active and self.context.get("automatic_pause", False):
+            info_message = _("Paused")
+
         disable_items = []
 
         if self.allow_disabling:
@@ -715,6 +718,9 @@ class TrayIcon:
                 description = next_time
         else:
             description = ""
+
+        if self.active and self.context.get("automatic_pause", False):
+            description = _("Paused")
 
         self.sni_service.set_tooltip("Safe Eyes", description)
         self.sni_service.set_xayatanalabel(description)
@@ -936,6 +942,17 @@ def on_start():
 def on_stop():
     """Disable the tray icon."""
     tray_icon.disable_ui()
+
+
+def on_activity_pause():
+    """Show the pause while retaining access to manual disable controls."""
+    tray_icon.update_menu()
+    tray_icon.update_tooltip()
+
+
+def on_activity_resume():
+    tray_icon.update_menu()
+    tray_icon.update_tooltip()
 
 
 def disable() -> None:

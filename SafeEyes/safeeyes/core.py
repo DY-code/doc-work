@@ -19,7 +19,9 @@
 """SafeEyesCore provides the core functionalities of Safe Eyes."""
 
 import datetime
+from dataclasses import dataclass
 import logging
+import math
 import typing
 
 from safeeyes.configuration import Config
@@ -35,6 +37,16 @@ import gi
 
 gi.require_version("GLib", "2.0")
 from gi.repository import GLib
+
+
+@dataclass
+class PausedTimer:
+    """Keep a scheduler step intact while the user is away."""
+
+    state: State
+    callback: typing.Callable[[], None]
+    remaining: int
+    since: datetime.datetime
 
 
 class SafeEyesCore:
@@ -81,10 +93,13 @@ class SafeEyesCore:
         self.on_update_next_break = EventHook()
         self.context = context
         self.context.state = State.WAITING
+        self._paused_timer: typing.Optional[PausedTimer] = None
+        self._wait_until = 0.0
 
     def initialize(self, config: Config):
         """Initialize the internal properties from configuration."""
         logging.info("Initialize the core")
+        self._config = config
         self.pre_break_warning_time = config.get("pre_break_warning_time")
         self._break_queue = BreakQueue.create(config, self.context)
         self.default_postpone_duration = int(config.get("postpone_duration"))
@@ -108,7 +123,10 @@ class SafeEyesCore:
 
     def stop(self, is_resting=False) -> None:
         """Stop Safe Eyes if it is running."""
+        self.discard_pause()
         if not self.running:
+            if self.context.state != State.QUIT:
+                self.context.state = State.RESTING if is_resting else State.STOPPED
             return
 
         logging.info("Stop Safe Eyes core")
@@ -119,6 +137,89 @@ class SafeEyesCore:
             self.context.state = State.RESTING if (is_resting) else State.STOPPED
 
         self.__wakeup_scheduler()
+
+    def pause_timer(self, credit_seconds: float = 0) -> bool:
+        """Freeze the current step without advancing the break queue."""
+        if not self.running or self._callback is None or self._timeout_id is None:
+            return False
+        now = datetime.datetime.now()
+        remaining = max(0, math.ceil(self._wait_until - now.timestamp()))
+        state = self.context.state
+        if state == State.BREAK and self._taking_break is None:
+            # The break has finished; the next scheduler job is queued for now.
+            state = State.WAITING
+        if state == State.WAITING:
+            remaining += math.ceil(credit_seconds)
+        self._paused_timer = PausedTimer(
+            state, self._callback, remaining, now
+        )
+        GLib.source_remove(self._timeout_id)
+        self._timeout_id = None
+        self._callback = None
+        self.running = False
+        self.context.state = State.RESTING
+        return True
+
+    def resume_timer(self) -> None:
+        """Resume working time, or credit elapsed wall time to an existing break."""
+        paused = self._paused_timer
+        if paused is None:
+            return
+        self._paused_timer = None
+        elapsed = max(0, (datetime.datetime.now() - paused.since).total_seconds())
+        self.running = True
+        self.context.state = paused.state
+        if paused.state == State.BREAK and self._taking_break is not None:
+            self._countdown = max(
+                0, math.ceil((self._countdown or 0) + paused.remaining - elapsed)
+            )
+            if self._countdown > 0:
+                self.__fire_hook(self.start_break, self._taking_break)
+            else:
+                self.__fire_hook(
+                    self.on_count_down, 0, self._taking_break.duration
+                )
+            self.__cycle_break_countdown()
+        else:
+            if self.scheduled_next_break_time is not None:
+                if paused.state == State.WAITING:
+                    self.scheduled_next_break_time = (
+                        datetime.datetime.now()
+                        + datetime.timedelta(seconds=paused.remaining)
+                    )
+                else:
+                    self.scheduled_next_break_time += datetime.timedelta(
+                        seconds=elapsed
+                    )
+                self.__fire_on_update_next_break(self.scheduled_next_break_time)
+            self.__wait_for(paused.remaining, paused.callback)
+
+    def discard_pause(self) -> None:
+        """Cancel a frozen step when disabled, reconfigured, or reset."""
+        paused = self._paused_timer
+        self._paused_timer = None
+        if paused is not None and self._taking_break is not None:
+            self._taking_break = None
+            self._countdown = None
+            self.__fire_stop_break()
+
+    def restart_timer(self, new_day: bool = False, idle_since=None) -> None:
+        """Start a full interval after a new day or a long natural idle period."""
+        self.discard_pause()
+        self.context.skipped = False
+        self.context.postponed = False
+        self.context.skip_button_disabled = False
+        self.context.postpone_button_disabled = False
+        self._take_break_now = False
+        if new_day:
+            self.context.session.pop("break", None)
+            self._break_queue = BreakQueue.create(self._config, self.context)
+            self.context.state = State.START
+            self.paused_time = -1
+        elif idle_since is not None:
+            self.context.state = State.RESTING
+            self.paused_time = idle_since.timestamp()
+        self.start()
 
     def skip(self) -> None:
         """User skipped the break using Skip button."""
@@ -378,6 +479,7 @@ class SafeEyesCore:
             raise Exception("this should not be called reentrantly")
 
         self._callback = callback
+        self._wait_until = datetime.datetime.now().timestamp() + duration
         self._timeout_id = GLib.timeout_add_seconds(duration, self.__on_wakeup)
 
     def __on_wakeup(self) -> bool:

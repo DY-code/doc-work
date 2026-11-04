@@ -21,6 +21,7 @@ application.
 """
 
 import atexit
+import datetime
 import gettext
 import logging
 from importlib import metadata
@@ -38,6 +39,8 @@ from safeeyes.model import BreakType, State, RequiredPluginException
 from safeeyes.translations import translate as _
 from safeeyes.plugin_manager import PluginManager
 from safeeyes.core import SafeEyesCore
+from safeeyes.activity import ActivityController, prepare_session
+from safeeyes.system_monitor import SystemStateMonitor
 from safeeyes.ui.settings_dialog import SettingsDialog
 
 gi.require_version("Gtk", "4.0")
@@ -105,6 +108,8 @@ class SafeEyes(Gtk.Application):
         self.active = False
         self._status = ""
         self.system_locale = system_locale
+        self.activity: typing.Optional[ActivityController] = None
+        self.system_monitor: typing.Optional[SystemStateMonitor] = None
 
         self.__register_cli_arguments()
         self.__register_actions()
@@ -304,6 +309,7 @@ class SafeEyes(Gtk.Application):
             session = utility.open_session()
         else:
             session = {"plugin": {}}
+        prepare_session(session)
 
         self.context = context.Context(
             api=context.API(self),
@@ -328,6 +334,12 @@ class SafeEyes(Gtk.Application):
         self.safe_eyes_core.on_stop_break += self.stop_break
         self.safe_eyes_core.on_update_next_break += self.update_next_break
         self.safe_eyes_core.initialize(self.config)
+        self.activity = ActivityController(
+            self.safe_eyes_core,
+            lambda: self.config.get("short_break_interval") * 60,
+            self._on_activity_pause,
+            self._on_activity_resume,
+        )
 
         try:
             self.plugins_manager.init(self.context, self.config)
@@ -337,6 +349,10 @@ class SafeEyes(Gtk.Application):
         self.hold()
 
         atexit.register(self.persist_session)
+        self.system_monitor = SystemStateMonitor(
+            self.activity.set_reason, self.context.is_wayland
+        )
+        self.system_monitor.start()
 
         if (
             not self.plugins_manager.needs_retry()
@@ -347,7 +363,7 @@ class SafeEyes(Gtk.Application):
             self.context.state = State.START
             self.plugins_manager.start()  # Call the start method of all plugins
             self.safe_eyes_core.start()
-            self.handle_system_suspend()
+            self.activity.ensure_paused()
 
     def do_activate(self):
         logging.info("Application activated")
@@ -448,6 +464,10 @@ class SafeEyes(Gtk.Application):
         and the app itself.
         """
         logging.info("Quit Safe Eyes")
+        if self.system_monitor is not None:
+            self.system_monitor.stop()
+        if self.activity is not None:
+            self.activity.cancel()
         self.break_screen.close()
         self.context["state"] = State.QUIT
         self.plugins_manager.stop()
@@ -459,45 +479,25 @@ class SafeEyes(Gtk.Application):
 
         super().quit()
 
-    def handle_suspend_callback(self, sleeping):
-        """If the system goes to sleep, Safe Eyes stop the core if it is
-        already active.
+    def _on_activity_pause(self):
+        """Keep plugins enabled while excluding automatic pauses from work time."""
+        self.break_screen.close()
+        self.plugins_manager.activity_pause()
+        self._status = _("Paused")
+        self.persist_session()
 
-        If it was active, Safe Eyes will become active after wake up.
-        """
-        if sleeping:
-            # Sleeping / suspending
-            if self.active:
-                logging.info("Stop Safe Eyes due to system suspend")
-                self.plugins_manager.stop()
-                self.safe_eyes_core.stop(True)
-        else:
-            # Resume from sleep
-            if self.active and self.safe_eyes_core.has_breaks():
-                logging.info("Resume Safe Eyes after system wakeup")
-                self.plugins_manager.start()
-                self.safe_eyes_core.start()
+    def _on_activity_resume(self):
+        if self.context.state == State.BREAK:
+            self._status = _("Resting")
+        self.plugins_manager.activity_resume()
+        self.persist_session()
 
-    def handle_suspend_signal(self, proxy, sender, signal, parameters):
-        if signal != "PrepareForSleep":
+    def set_idle(self, idle, credit_seconds=0):
+        """Accept Smart Pause events through the same controller as system events."""
+        if idle and not self.active:
             return
-
-        (sleeping,) = parameters
-
-        self.handle_suspend_callback(sleeping)
-
-    def handle_system_suspend(self):
-        """Setup system suspend listener."""
-        self.suspend_proxy = Gio.DBusProxy.new_for_bus_sync(
-            bus_type=Gio.BusType.SYSTEM,
-            flags=Gio.DBusProxyFlags.DO_NOT_LOAD_PROPERTIES,
-            info=None,
-            name="org.freedesktop.login1",
-            object_path="/org/freedesktop/login1",
-            interface_name="org.freedesktop.login1.Manager",
-            cancellable=None,
-        )
-        self.suspend_proxy.connect("g-signal", self.handle_suspend_signal)
+        if self.activity is not None:
+            self.activity.set_reason("idle", idle, credit_seconds)
 
     def on_skipped(self):
         """Listen to break screen Skip action and send the signal to core."""
@@ -525,6 +525,7 @@ class SafeEyes(Gtk.Application):
 
         logging.info("Saving settings to safeeyes.json")
         # Stop the Safe Eyes core
+        self.activity.cancel()
         if self.active:
             self.plugins_manager.stop()
             self.safe_eyes_core.stop()
@@ -537,6 +538,7 @@ class SafeEyes(Gtk.Application):
 
     def restart(self, config, set_active=False):
         logging.info("Initialize SafeEyesCore with modified settings")
+        self.activity.cancel()
 
         # Restart the core and initialize the components
         self.config = config
@@ -555,6 +557,7 @@ class SafeEyes(Gtk.Application):
         if self.active and self.safe_eyes_core.has_breaks():
             self.safe_eyes_core.start()
             self.plugins_manager.start()
+            self.activity.ensure_paused()
 
     def enable_safeeyes(self, scheduled_next_break_time=-1):
         """Listen to tray icon enable action and send the signal to core."""
@@ -564,11 +567,18 @@ class SafeEyes(Gtk.Application):
             and self.safe_eyes_core.has_breaks()
         ):
             self.active = True
-            self.safe_eyes_core.start(scheduled_next_break_time)
+            if self.context.session.get("last_active_date") != (
+                datetime.date.today().isoformat()
+            ):
+                self.safe_eyes_core.restart_timer(new_day=True)
+            else:
+                self.safe_eyes_core.start(scheduled_next_break_time)
             self.plugins_manager.start()
+            self.activity.ensure_paused()
 
     def disable_safeeyes(self, status=None, is_resting=False):
         """Listen to tray icon disable action and send the signal to core."""
+        self.activity.cancel()
         if self.active:
             self.active = False
             self.plugins_manager.stop()
@@ -611,6 +621,8 @@ class SafeEyes(Gtk.Application):
 
     def take_break(self, break_type: typing.Optional[BreakType] = None) -> None:
         """Take a break now."""
+        if self.activity is not None and self.activity.reasons:
+            return
         self.safe_eyes_core.take_break(break_type)
 
     def status(self):
@@ -619,6 +631,8 @@ class SafeEyes(Gtk.Application):
 
     def persist_session(self):
         """Save the session object to the session file."""
+        if self.safe_eyes_core.running:
+            self.context.session["last_active_date"] = datetime.date.today().isoformat()
         if self.config.get("persist_state"):
             utility.write_json(utility.SESSION_FILE_PATH, self.context["session"])
         else:

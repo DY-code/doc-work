@@ -55,6 +55,9 @@ class API:
             self._application.disable_safeeyes, status, is_resting
         )
 
+    def set_idle(self, idle: bool, credit_seconds: float = 0) -> None:
+        utility.execute_main_thread(self._application.set_idle, idle, credit_seconds)
+
     def status(self) -> str:
         return self._application.status()
 
