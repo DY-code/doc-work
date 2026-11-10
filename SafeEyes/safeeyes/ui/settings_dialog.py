@@ -27,7 +27,7 @@ from safeeyes.model import PluginDependency
 from safeeyes.translations import translate as _
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk, Gio
+from gi.repository import Gtk
 from gi.repository import GdkPixbuf
 
 
@@ -200,7 +200,6 @@ class SettingsDialog(Gtk.ApplicationWindow):
         GTK >= 4.10 使用 Gtk.AlertDialog；GTK < 4.10（Ubuntu 22.04 为 4.6）
         无该 API，回退为 Gtk.Window 自建模态确认框。
         """
-
         if hasattr(Gtk, "AlertDialog"):
 
             def __response(dialog, result) -> None:
@@ -628,6 +627,7 @@ class BreakSettingsDialog(Gtk.Window):
     switch_override_interval: Gtk.Switch = Gtk.Template.Child()
     switch_override_duration: Gtk.Switch = Gtk.Template.Child()
     switch_override_plugins: Gtk.Switch = Gtk.Template.Child()
+    switch_distraction_stats: Gtk.Switch = Gtk.Template.Child()
     spin_interval: Gtk.SpinButton = Gtk.Template.Child()
     spin_duration: Gtk.SpinButton = Gtk.Template.Child()
     btn_image: Gtk.Button = Gtk.Template.Child()
@@ -665,6 +665,9 @@ class BreakSettingsDialog(Gtk.Window):
         self.switch_override_interval.set_active(interval_overriden)
         self.switch_override_duration.set_active(duration_overriden)
         self.switch_override_plugins.set_active(plugins_overriden)
+        self.switch_distraction_stats.set_active(
+            break_config.get("distraction_stats", False)
+        )
         self.cmb_type.set_active(0 if is_short else 1)
 
         if interval_overriden:
@@ -774,6 +777,9 @@ class BreakSettingsDialog(Gtk.Window):
     def on_window_delete(self, *args) -> None:
         """Event handler for Properties dialog close action."""
         break_name = self.txt_break.get_text().strip()
+        self.break_config["distraction_stats"] = (
+            self.switch_distraction_stats.get_active()
+        )
         if break_name:
             self.break_config["name"] = break_name
         if self.switch_override_interval.get_active():
@@ -842,7 +848,9 @@ class NewBreakDialog(Gtk.Window):
     @Gtk.Template.Callback()
     def save(self, button) -> None:
         """Event handler for Properties dialog close action."""
-        break_config = {"name": self.txt_break.get_text().strip()}
+        break_config = {
+            "name": self.txt_break.get_text().strip(), "distraction_stats": False
+        }
 
         if self.cmb_type.get_active() == 0:
             self.parent_config.get("short_breaks").append(break_config)

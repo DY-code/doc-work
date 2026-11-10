@@ -67,6 +67,7 @@ class Break:
         duration: int,
         image: typing.Optional[str],
         plugins: dict,
+        distraction_stats: bool = False,
     ):
         self.type = break_type
         self.name = name
@@ -74,6 +75,8 @@ class Break:
         self.image = image
         self.plugins = plugins
         self.time = time
+        self.distraction_stats = distraction_stats
+        self.occurrence_id: typing.Optional[str] = None
 
     def __str__(self) -> str:
         return 'Break: {{name: "{}", type: {}, duration: {}}}\n'.format(
@@ -344,6 +347,7 @@ class BreakQueue:
                 continue
 
             break_obj = Break(break_type, name, interval, duration, image, plugins)
+            break_obj.distraction_stats = break_config.get("distraction_stats", False)
             queue.append(break_obj)
 
         if len(queue) == 0:

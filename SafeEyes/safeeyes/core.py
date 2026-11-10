@@ -23,6 +23,7 @@ from dataclasses import dataclass
 import logging
 import math
 import typing
+import uuid
 
 from safeeyes.configuration import Config
 from safeeyes.model import Break
@@ -414,6 +415,7 @@ class SafeEyesCore:
             # Wait in user thread
             self.__postpone_break()
         else:
+            break_obj.occurrence_id = uuid.uuid4().hex
             self.__fire_hook(self.start_break, break_obj)
             self.__start_break()
 

@@ -10,6 +10,7 @@
     "pre_break_warning_time": 10,
     "short_break_duration": 15,
     "persist_state": false,
+    "distraction_stats_migrated": false,
     "postpone_duration": 5,
     "postpone_unit": "minutes",
     "shortcut_disable_time": 2,

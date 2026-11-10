@@ -171,6 +171,23 @@ def start_break(timer):
     assert timer.ctx.state == State.BREAK
 
 
+def test_break_occurrence_survives_sleep_but_changes_for_next_break(timer):
+    start_break(timer)
+    break_obj = timer.core._taking_break
+    token = break_obj.occurrence_id
+    assert token
+    timer.controller.set_reason("sleep", True)
+    timer.shift(10)
+    timer.controller.set_reason("sleep", False)
+    assert timer.core._taking_break.occurrence_id == token
+    for _ in range(20):
+        timer.fire()
+    timer.fire()
+    timer.fire()
+    timer.fire()
+    assert timer.core._taking_break.occurrence_id != token
+
+
 def test_short_sleep_credits_time_to_current_break(timer):
     shown = Mock(return_value=True)
     stopped = Mock(return_value=True)

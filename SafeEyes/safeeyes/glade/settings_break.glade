@@ -85,6 +85,24 @@
                   </object>
                 </child>
                 <child>
+                  <object class="GtkBox">
+                    <property name="spacing">10</property>
+                    <child>
+                      <object class="GtkLabel">
+                        <property name="label">启用分心统计</property>
+                        <property name="hexpand">1</property>
+                        <property name="halign">start</property>
+                        <property name="tooltip-text">是表示分心，否表示未分心；所有启用项共用每日统计。</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkSwitch" id="switch_distraction_stats">
+                        <property name="valign">center</property>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <child>
                   <object class="GtkBox" id="box7">
                     <property name="visible">1</property>
                     <property name="spacing">10</property>

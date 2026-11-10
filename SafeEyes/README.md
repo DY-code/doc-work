@@ -56,6 +56,25 @@ and manual disabling takes precedence over automatic resume.
 
 These changes take effect after restarting Safe Eyes from this checkout.
 
+## Distraction statistics in this checkout
+
+Each break's settings has an **启用分心统计** switch. On the first run of this
+version, the existing “你分心了吗？” question is enabled; other and newly created
+breaks default to off. Renaming a break preserves its switch. “是” always means
+distracted and “否” means not distracted, regardless of the reminder's wording.
+
+Enabled reminders show the two answer buttons and today's counts and percentage.
+An unanswered reminder is excluded. Each break accepts one answer shared across
+all monitors, including after sleep or lock-screen restoration; the normal break
+countdown continues. All enabled breaks contribute to the same daily totals.
+
+Counts are saved immediately to `distraction_stats.json` in the Safe Eyes config
+directory (normally `~/.config/safeeyes/`), independently of session persistence.
+Disabling or deleting a break does not delete its accumulated counts. New calendar
+days show new totals; previous days remain in the file. There is no history UI.
+
+Restart this checkout to load the new controls and initialize existing settings.
+
 ## Installation guide
 
 Safe Eyes is available on the official repositories of many popular the distributions.

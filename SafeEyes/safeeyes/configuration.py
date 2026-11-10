@@ -29,6 +29,7 @@ import shutil
 import typing
 
 from safeeyes import utility
+from safeeyes.distraction import migrate_distraction_config
 
 
 class Config:
@@ -51,6 +52,7 @@ class Config:
         if user_config is None:
             cls._initialize_config()
             user_config = copy.deepcopy(system_config)
+            migrate_distraction_config(user_config)
             cfg = cls(user_config, system_config)
             cfg.save()
 
@@ -78,6 +80,7 @@ class Config:
 
         utility.merge_plugins(user_config)
 
+        migrate_distraction_config(user_config)
         cfg = cls(user_config, system_config)
 
         if user_config != user_config_disk:
