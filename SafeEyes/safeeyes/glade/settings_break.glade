@@ -89,14 +89,14 @@
                     <property name="spacing">10</property>
                     <child>
                       <object class="GtkLabel">
-                        <property name="label">启用分心统计</property>
+                        <property name="label">询问类型</property>
                         <property name="hexpand">1</property>
                         <property name="halign">start</property>
-                        <property name="tooltip-text">是表示分心，否表示未分心；所有启用项共用每日统计。</property>
+                        <property name="tooltip-text">每条休息最多启用一种询问；同类询问共用选项和每日统计。</property>
                       </object>
                     </child>
                     <child>
-                      <object class="GtkSwitch" id="switch_distraction_stats">
+                      <object class="GtkDropDown" id="dropdown_question_type">
                         <property name="valign">center</property>
                       </object>
                     </child>

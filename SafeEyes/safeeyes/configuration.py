@@ -30,6 +30,7 @@ import typing
 
 from safeeyes import utility
 from safeeyes.distraction import migrate_distraction_config
+from safeeyes.surveys import migrate_surveys
 
 
 class Config:
@@ -53,6 +54,7 @@ class Config:
             cls._initialize_config()
             user_config = copy.deepcopy(system_config)
             migrate_distraction_config(user_config)
+            migrate_surveys(user_config)
             cfg = cls(user_config, system_config)
             cfg.save()
 
@@ -81,6 +83,7 @@ class Config:
         utility.merge_plugins(user_config)
 
         migrate_distraction_config(user_config)
+        migrate_surveys(user_config)
         cfg = cls(user_config, system_config)
 
         if user_config != user_config_disk:

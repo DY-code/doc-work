@@ -29,7 +29,8 @@ import gi
 from safeeyes import utility
 from safeeyes.configuration import Config
 from safeeyes.context import Context
-from safeeyes.distraction import DistractionPrompt, DistractionStore
+from safeeyes.distraction import DistractionPrompt
+from safeeyes.surveys import KINDS, TITLES, SurveyPrompt, SurveyStore
 from safeeyes.model import Break, TrayAction
 from safeeyes.translations import translate as _
 
@@ -72,8 +73,11 @@ class BreakScreen:
         self.shortcut_disable_time = 2
         self.strict_break = False
         self.windows = []
-        self.distraction = DistractionPrompt(
-            DistractionStore(Path(utility.CONFIG_DIRECTORY) / "distraction_stats.json")
+        self.distraction = SurveyPrompt(
+            SurveyStore(
+                Path(utility.CONFIG_DIRECTORY) / "health_stats.json",
+                Path(utility.CONFIG_DIRECTORY) / "distraction_stats.json",
+            )
         )
         self._summary_date = datetime.date.today()
         self.show_skip_button = False
@@ -110,6 +114,7 @@ class BreakScreen:
             "fade_in_break_screen_duration", 1500
         )
         self.strict_break = config.get("strict_break", False)
+        self.distraction.configure(config.get("survey_options"))
 
     def skip_break(self) -> None:
         """Skip the break from the break screen."""
@@ -152,7 +157,11 @@ class BreakScreen:
         message = break_obj.name
         if break_obj.occurrence_id is None:
             break_obj.occurrence_id = uuid.uuid4().hex
-        self.distraction.begin(break_obj.occurrence_id, break_obj.distraction_stats)
+        self.distraction.begin(
+            break_obj.occurrence_id,
+            break_obj.question_type != "none",
+            break_obj.question_type,
+        )
         image_path = break_obj.image
         self.enable_shortcut = self.shortcut_disable_time <= 0
         self.__show_break_screen(message, image_path, widget, tray_actions)
@@ -160,9 +169,13 @@ class BreakScreen:
     def _answer_distraction(self, token: str, answer: bool) -> None:
         try:
             self.distraction.submit(token, answer)
-        except (OSError, ValueError):
+        except (OSError, ValueError, AttributeError):
             logging.exception("Could not save distraction statistics")
         self._refresh_distraction()
+
+        application = getattr(self, "application", None)
+        if application is not None and hasattr(application, "checkpoint"):
+            application.checkpoint()
 
     def _refresh_distraction(self) -> None:
         for window in self.windows:
@@ -425,8 +438,10 @@ class BreakScreenWindow(Gtk.Window):
         on_skip: typing.Callable[[Gtk.Button], None],
         enable_shortcut: bool,
         fade_in_duration_ms: int,
-        distraction: typing.Optional[DistractionPrompt] = None,
-        on_answer: typing.Optional[typing.Callable[[str, bool], None]] = None,
+        distraction: typing.Optional[
+            typing.Union[DistractionPrompt, SurveyPrompt]
+        ] = None,
+        on_answer: typing.Optional[typing.Callable] = None,
     ):
         super().__init__(application=application)
 
@@ -494,19 +509,32 @@ class BreakScreenWindow(Gtk.Window):
     def _build_distraction(self, on_answer) -> None:
         """Keep response buttons independent of skip/postpone countdown locking."""
         prompt = self._distraction
-        row = Gtk.Box(spacing=24, halign=Gtk.Align.CENTER)
+        if isinstance(prompt, SurveyPrompt):
+            self.box_distraction.append(
+                Gtk.Label(label=f"{TITLES[KINDS.index(prompt.kind)]}：请选择当前状态")
+            )
+        row = Gtk.FlowBox(
+            selection_mode=Gtk.SelectionMode.NONE,
+            max_children_per_line=3,
+            min_children_per_line=1,
+            column_spacing=12,
+            row_spacing=12,
+            halign=Gtk.Align.CENTER,
+        )
         token = prompt.token
-        for label, answer in (("是", True), ("否", False)):
+        choices = getattr(prompt, "choices", (("是", True), ("否", False)))
+        self._choice_values = [value for label, value in choices]
+        for label, answer in choices:
             button = Gtk.Button(label=label)
             button.set_size_request(100, 44)
             button.connect(
                 "clicked", lambda button, value: on_answer(token, value), answer
             )
-            row.append(button)
+            row.insert(button, -1)
             self._answer_buttons.append(button)
         self.box_distraction.append(row)
         self._answer_label = Gtk.Label()
-        self._summary_label = Gtk.Label(wrap=True)
+        self._summary_label = Gtk.Label(wrap=True, max_width_chars=65)
         self.box_distraction.append(self._answer_label)
         self.box_distraction.append(self._summary_label)
         self.box_distraction.set_visible(True)
@@ -517,12 +545,16 @@ class BreakScreenWindow(Gtk.Window):
         prompt = self._distraction
         if prompt is None or not self._answer_buttons:
             return
-        for button, value in zip(self._answer_buttons, (True, False)):
+        for button, value in zip(self._answer_buttons, self._choice_values):
             button.set_sensitive(prompt.answer is None)
-            if prompt.answer is value:
+            if prompt.answer == value:
                 button.add_css_class("suggested-action")
         if prompt.answer is not None:
-            answer = "是（分心）" if prompt.answer else "否（未分心）"
+            answer = (
+                prompt.answer_label()
+                if isinstance(prompt, SurveyPrompt)
+                else ("是（分心）" if prompt.answer else "否（未分心）")
+            )
             self._answer_label.set_text(f"已记录：{answer}")
         else:
             self._answer_label.set_text(prompt.error)

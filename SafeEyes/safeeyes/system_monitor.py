@@ -67,6 +67,17 @@ class SystemStateMonitor:
             logging.warning("Cannot monitor system sleep: %s", error)
 
     def _sleep_signal(self, proxy, sender, signal, parameters) -> None:
+        if signal == "PrepareForShutdown":
+            shutting_down = parameters.unpack()[0]
+            if shutting_down:
+                try:
+                    self.on_state("shutdown", True)
+                finally:
+                    self._release_sleep_delay()
+            else:
+                self.on_state("shutdown", False)
+                self._acquire_sleep_delay()
+            return
         if signal == "PrepareForSleep":
             (sleeping,) = parameters.unpack()
             if sleeping:
@@ -91,7 +102,7 @@ class SystemStateMonitor:
                 "Inhibit",
                 GLib.Variant(
                     "(ssss)",
-                    ("sleep", "Safe Eyes", "Save the current break timer", "delay"),
+                    ("sleep:shutdown", "Safe Eyes", "Save the break timer", "delay"),
                 ),
                 Gio.DBusCallFlags.NONE,
                 1000,

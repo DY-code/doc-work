@@ -72,11 +72,11 @@ def timer(monkeypatch, time_machine):
     )
 
 
-def test_same_day_sleep_retains_remaining_even_after_hours(timer):
+def test_same_day_sleep_below_threshold_retains_remaining(timer):
     timer.core.start()
     timer.shift(300)
     timer.controller.set_reason("sleep", True)
-    timer.shift(7200)
+    timer.shift(3600)
     timer.controller.set_reason("sleep", False)
     assert timer.ctx.state == State.WAITING
     assert timer.scheduler.duration == 900
@@ -94,7 +94,7 @@ def test_all_reasons_must_clear_before_resuming(timer, last_reason):
     for reason in reasons:
         timer.controller.set_reason(reason, True)
         timer.controller.set_reason(reason, True)
-    timer.shift(7200)
+    timer.shift(3600)
     for reason in reasons:
         if reason != last_reason:
             timer.controller.set_reason(reason, False)
@@ -113,7 +113,7 @@ def test_idle_before_sleep_cannot_reset_same_day_interval(timer):
     timer.controller.set_reason("idle", True, credit_seconds=5)
     timer.controller.set_reason("screen", True)
     timer.controller.set_reason("sleep", True)
-    timer.shift(7200)
+    timer.shift(3600)
     timer.controller.set_reason("sleep", False)
     timer.controller.set_reason("screen", False)
     assert not timer.core.running

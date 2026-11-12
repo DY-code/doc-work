@@ -28,8 +28,10 @@ def test_multi_monitor_buttons_update_together_without_touching_countdown(tmp_pa
     screen._refresh_distraction = lambda: [
         window.refresh_distraction() for window in screen.windows
     ]
+
     def callback(token, answer):
         BreakScreen._answer_distraction(screen, token, answer)
+
     try:
         for _ in range(2):
             window = BreakScreenWindow(
@@ -111,7 +113,7 @@ def test_settings_switch_survives_rename_and_can_be_disabled():
     parent = Gtk.Window()
     dialog = BreakSettingsDialog(parent, item, True, config, {}, Mock(), Mock(), Mock())
     try:
-        assert dialog.switch_distraction_stats.get_active()
+        assert dialog.dropdown_question_type.get_selected() == 1
         dialog.txt_break.set_text("刚才是否走神？")
         dialog.on_window_delete()
         assert item["name"] == "刚才是否走神？"
@@ -119,9 +121,141 @@ def test_settings_switch_survives_rename_and_can_be_disabled():
         dialog = BreakSettingsDialog(
             parent, item, True, config, {}, Mock(), Mock(), Mock()
         )
-        dialog.switch_distraction_stats.set_active(False)
+        dialog.dropdown_question_type.set_selected(0)
         dialog.on_window_delete()
         assert item["distraction_stats"] is False
     finally:
         dialog.destroy()
         parent.destroy()
+
+
+def test_away_threshold_setting_defaults_to_two_hours_and_saves_custom_minutes(
+    monkeypatch,
+):
+    from safeeyes import utility
+    from safeeyes.ui.settings_dialog import SettingsDialog
+
+    data = utility.load_json(utility.SYSTEM_CONFIG_FILE_PATH)
+    config = Config(data, {})
+    monkeypatch.setattr(utility, "load_plugins_config", lambda config: [])
+    saved = Mock()
+    dialog = SettingsDialog(None, config, saved)
+    try:
+        assert dialog.spin_away_reset.get_value_as_int() == 120
+        dialog.spin_away_reset.set_value(45)
+        dialog.on_window_delete()
+        assert config.get("away_reset_minutes") == 45
+        saved.assert_called_once_with(config)
+    finally:
+        dialog.destroy()
+
+
+def test_survey_options_editor_preserves_ids_and_deleted_choices():
+    from safeeyes.ui.survey_options import SurveyOptionsEditor
+
+    config = Config({}, {})
+    editor = SurveyOptionsEditor(config)
+    editor.selector.set_selected(2)  # Body tension
+    original = editor.rows[0][0]["id"]
+    editor.rows[0][1].set_text("身体放松")
+    editor.add_option()
+    added = editor.rows[-1][0]
+    editor.rows[-1][1].set_text("轻度紧绷")
+    editor.move_option(added, -1)
+    assert editor.save()
+    choices = config.get("survey_options")["tension"]
+    assert choices[0]["id"] == original
+    assert choices[0]["label"] == "身体放松"
+    assert choices[1]["id"] == added["id"]
+    editor.remove_option(added)
+    assert editor.save()
+    assert (
+        next(
+            item
+            for item in config.get("survey_options")["tension"]
+            if item["id"] == added["id"]
+        )["active"]
+        is False
+    )
+    editor.remove_option(editor.rows[0][0])
+    assert len(editor.rows) == 2
+    assert editor.error.get_text()
+
+
+def test_break_question_selector_is_exclusive():
+    item = {"name": "自定义提醒", "question_type": "posture"}
+    config = Config(
+        {
+            "short_breaks": [item],
+            "long_breaks": [],
+            "short_break_interval": 20,
+            "short_break_duration": 30,
+        },
+        {},
+    )
+    parent = Gtk.Window()
+    dialog = BreakSettingsDialog(parent, item, True, config, {}, Mock(), Mock(), Mock())
+    try:
+        assert dialog.dropdown_question_type.get_selected() == 2
+        dialog.dropdown_question_type.set_selected(4)
+        dialog.on_window_delete()
+        assert item["question_type"] == "fatigue"
+        assert item["distraction_stats"] is False
+    finally:
+        dialog.destroy()
+        parent.destroy()
+
+
+def test_categorical_buttons_support_many_levels_and_one_shared_answer(tmp_path):
+    from safeeyes.surveys import SurveyPrompt, SurveyStore, default_options
+
+    catalog = default_options()
+    catalog["fatigue"].extend(
+        [
+            {"id": "mild", "label": "轻度疲劳", "active": True},
+            {"id": "severe", "label": "明显疲劳", "active": True},
+        ]
+    )
+    prompt = SurveyPrompt(SurveyStore(tmp_path / "stats.json"))
+    prompt.configure(catalog)
+    prompt.begin("one", True, "fatigue")
+    windows = []
+
+    def answer(token, option):
+        prompt.submit(token, option)
+        for window in windows:
+            window.refresh_distraction()
+
+    try:
+        for _ in range(2):
+            windows.append(
+                BreakScreenWindow(
+                    None,
+                    "检查状态",
+                    None,
+                    "",
+                    1280,
+                    720,
+                    [],
+                    Mock(),
+                    False,
+                    Mock(),
+                    False,
+                    Mock(),
+                    False,
+                    100,
+                    prompt,
+                    answer,
+                )
+            )
+        assert len(windows[0]._answer_buttons) == 4
+        windows[0]._answer_buttons[2].emit("clicked")
+        for window in windows:
+            assert "轻度疲劳" in window._answer_label.get_text()
+            assert "100%" in window._summary_label.get_text()
+            assert all(not button.get_sensitive() for button in window._answer_buttons)
+        windows[1]._answer_buttons[1].emit("clicked")
+        assert prompt.store.today("fatigue") == {"mild": 1}
+    finally:
+        for window in windows:
+            window.destroy()

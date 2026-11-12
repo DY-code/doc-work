@@ -76,6 +76,7 @@ class Break:
         self.plugins = plugins
         self.time = time
         self.distraction_stats = distraction_stats
+        self.question_type = "distraction" if distraction_stats else "none"
         self.occurrence_id: typing.Optional[str] = None
 
     def __str__(self) -> str:
@@ -185,6 +186,53 @@ class BreakQueue:
 
     def get_break(self) -> Break:
         return self.__current_break
+
+    def export_progress(self) -> dict:
+        """Preserve random ordering, queue positions and remaining long intervals."""
+        def entries(queue):
+            return [[item.config_index, item.time] for item in queue or []]
+
+        queue = self.__long_queue if self.is_long_break() else self.__short_queue
+        return {
+            "short": entries(self.__short_queue),
+            "long": entries(self.__long_queue),
+            "next_short": self.__current_short,
+            "next_long": self.__current_long,
+            "current_type": self.__current_break.type.name,
+            "current_index": queue.index(self.__current_break),
+        }
+
+    def restore_progress(self, data: dict) -> None:
+        """Validate a saved ordering before replacing the live queue."""
+        def restore(queue, entries, position):
+            by_index = {item.config_index: item for item in queue or []}
+            indexes = [entry[0] for entry in entries]
+            if sorted(indexes) != sorted(by_index):
+                raise ValueError("Saved breaks do not match configuration")
+            if type(position) is not int or not 0 <= position < max(1, len(entries)):
+                raise ValueError("Invalid queue position")
+            result = []
+            for index, remaining in entries:
+                if type(remaining) is not int or abs(remaining) > 1000000:
+                    raise ValueError("Invalid break interval")
+                result.append((by_index[index], remaining))
+            return result
+
+        shorts = restore(self.__short_queue, data["short"], data["next_short"])
+        longs = restore(self.__long_queue, data["long"], data["next_long"])
+        kind = BreakType[data["current_type"]]
+        selected = longs if kind == BreakType.LONG_BREAK else shorts
+        index = data["current_index"]
+        if type(index) is not int or not 0 <= index < len(selected):
+            raise ValueError("Invalid current break")
+        for item, remaining in shorts + longs:
+            item.time = remaining
+        self.__short_queue = [item for item, _ in shorts] or None
+        self.__long_queue = [item for item, _ in longs] or None
+        self.__current_short = data["next_short"]
+        self.__current_long = data["next_long"]
+        self.__current_break = selected[index][0]
+        self.context.session["break"] = self.__current_break.name
 
     def get_break_with_type(
         self, break_type: typing.Optional[BreakType] = None
@@ -347,7 +395,14 @@ class BreakQueue:
                 continue
 
             break_obj = Break(break_type, name, interval, duration, image, plugins)
+            break_obj.config_index = next(
+                i for i, item in enumerate(break_configs) if item is break_config
+            )
             break_obj.distraction_stats = break_config.get("distraction_stats", False)
+            break_obj.question_type = break_config.get(
+                "question_type",
+                "distraction" if break_obj.distraction_stats else "none",
+            )
             queue.append(break_obj)
 
         if len(queue) == 0:

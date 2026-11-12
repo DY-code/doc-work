@@ -40,6 +40,7 @@ from safeeyes.translations import translate as _
 from safeeyes.plugin_manager import PluginManager
 from safeeyes.core import SafeEyesCore
 from safeeyes.activity import ActivityController, prepare_session
+from safeeyes.progress import ProgressFile
 from safeeyes.system_monitor import SystemStateMonitor
 from safeeyes.ui.settings_dialog import SettingsDialog
 
@@ -110,6 +111,9 @@ class SafeEyes(Gtk.Application):
         self.system_locale = system_locale
         self.activity: typing.Optional[ActivityController] = None
         self.system_monitor: typing.Optional[SystemStateMonitor] = None
+        self.progress = None
+        self._checkpoint_source = None
+        self._closing = False
 
         self.__register_cli_arguments()
         self.__register_actions()
@@ -339,6 +343,11 @@ class SafeEyes(Gtk.Application):
             lambda: self.config.get("short_break_interval") * 60,
             self._on_activity_pause,
             self._on_activity_resume,
+            lambda: max(1, self.config.get("away_reset_minutes", 120)) * 60,
+        )
+        self.progress = ProgressFile(
+            Path(utility.CONFIG_DIRECTORY) / "timer_progress.json",
+            self.activity, lambda: self.config, self.break_screen.distraction,
         )
 
         try:
@@ -350,7 +359,7 @@ class SafeEyes(Gtk.Application):
 
         atexit.register(self.persist_session)
         self.system_monitor = SystemStateMonitor(
-            self.activity.set_reason, self.context.is_wayland
+            self._on_system_state, self.context.is_wayland
         )
         self.system_monitor.start()
 
@@ -362,8 +371,16 @@ class SafeEyes(Gtk.Application):
             self.active = True
             self.context.state = State.START
             self.plugins_manager.start()  # Call the start method of all plugins
-            self.safe_eyes_core.start()
+            if not self.progress.restore():
+                self.safe_eyes_core.start()
             self.activity.ensure_paused()
+        self._checkpoint_source = GLib.timeout_add_seconds(30, self.checkpoint)
+
+    def checkpoint(self):
+        """Save independent timer progress without changing optional session data."""
+        if self.progress is not None and not self._closing:
+            self.progress.save(self.active)
+        return GLib.SOURCE_CONTINUE
 
     def do_activate(self):
         logging.info("Application activated")
@@ -464,6 +481,12 @@ class SafeEyes(Gtk.Application):
         and the app itself.
         """
         logging.info("Quit Safe Eyes")
+        if self.progress is not None:
+            self.progress.save(self.active, closed=True)
+        self._closing = True
+        if self._checkpoint_source is not None:
+            GLib.source_remove(self._checkpoint_source)
+            self._checkpoint_source = None
         if self.system_monitor is not None:
             self.system_monitor.stop()
         if self.activity is not None:
@@ -486,6 +509,11 @@ class SafeEyes(Gtk.Application):
         self._status = _("Paused")
         self.persist_session()
 
+    def _on_system_state(self, reason, active):
+        """Persist transitions even when another reason already paused the timer."""
+        self.activity.set_reason(reason, active)
+        self.checkpoint()
+
     def _on_activity_resume(self):
         if self.context.state == State.BREAK:
             self._status = _("Resting")
@@ -498,6 +526,8 @@ class SafeEyes(Gtk.Application):
             return
         if self.activity is not None:
             self.activity.set_reason("idle", idle, credit_seconds)
+            if getattr(self, "progress", None) is not None:
+                self.checkpoint()
 
     def on_skipped(self):
         """Listen to break screen Skip action and send the signal to core."""
@@ -586,6 +616,8 @@ class SafeEyes(Gtk.Application):
             if status is None:
                 status = _("Disabled until restart")
             self._status = status
+            if getattr(self, "progress", None) is not None:
+                self.progress.save(False)
 
     def on_start_break(self, break_obj):
         """Pass the break information to plugins."""
@@ -631,6 +663,7 @@ class SafeEyes(Gtk.Application):
 
     def persist_session(self):
         """Save the session object to the session file."""
+        self.checkpoint()
         if self.safe_eyes_core.running:
             self.context.session["last_active_date"] = datetime.date.today().isoformat()
         if self.config.get("persist_state"):

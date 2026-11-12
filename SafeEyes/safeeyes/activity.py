@@ -24,11 +24,15 @@ class ActivityController:
         short_interval: Callable[[], float],
         on_pause: Callable[[], None],
         on_resume: Callable[[], None],
+        reset_after: Callable[[], float] = lambda: 7200,
     ) -> None:
         self.core = core
         self.short_interval = short_interval
         self.on_pause = on_pause
         self.on_resume = on_resume
+        self.reset_after = reset_after
+        self.away_since: datetime.datetime | None = None
+        self.away_duration = 0.0
         self.reasons: set[str] = set()
         self.paused_since: datetime.datetime | None = None
         self.idle_since: datetime.datetime | None = None
@@ -50,11 +54,20 @@ class ActivityController:
                 )
             else:
                 self.system_pause_seen = True
+                if self.away_since is None:
+                    self.away_since = datetime.datetime.now()
+                    self.away_duration = 0
             self.ensure_paused(credit_seconds if reason == "idle" else 0)
         else:
             if reason not in self.reasons:
                 return
             self.reasons.remove(reason)
+            if reason != "idle" and not self.reasons - {"idle"}:
+                if self.away_since is not None:
+                    self.away_duration = max(
+                        0, (datetime.datetime.now() - self.away_since).total_seconds()
+                    )
+                    self.away_since = None
             if not self.reasons:
                 self._resume()
 
@@ -92,15 +105,19 @@ class ActivityController:
             and self.idle_since is not None
             and idle_duration >= self.short_interval()
         )
+        reset_cycle = (
+            self.system_pause_seen and self.away_duration >= self.reset_after()
+        )
         self.core.context["idle_period"] = idle_duration
         self.core.context["automatic_pause"] = False
         self.paused_since = None
         self.system_pause_seen = False
-        if new_day or long_idle:
-            self.core.restart_timer(new_day, self.idle_since)
+        if new_day or long_idle or reset_cycle:
+            self.core.restart_timer(new_day or reset_cycle, self.idle_since)
         else:
             self.core.resume_timer()
         self.idle_since = None
+        self.away_duration = 0
         self.core.context.session["last_active_date"] = now.date().isoformat()
         logging.info("Resume timer (new day: %s)", new_day)
         self.on_resume()
@@ -111,5 +128,8 @@ class ActivityController:
         self.idle_since = None
         self.system_pause_seen = bool(self.reasons - {"idle"})
         self.reasons.discard("idle")
+        if not self.reasons:
+            self.away_since = None
+        self.away_duration = 0
         self.core.context["automatic_pause"] = False
         self.core.discard_pause()

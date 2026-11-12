@@ -151,9 +151,7 @@ class SafeEyesCore:
             state = State.WAITING
         if state == State.WAITING:
             remaining += math.ceil(credit_seconds)
-        self._paused_timer = PausedTimer(
-            state, self._callback, remaining, now
-        )
+        self._paused_timer = PausedTimer(state, self._callback, remaining, now)
         GLib.source_remove(self._timeout_id)
         self._timeout_id = None
         self._callback = None
@@ -177,9 +175,7 @@ class SafeEyesCore:
             if self._countdown > 0:
                 self.__fire_hook(self.start_break, self._taking_break)
             else:
-                self.__fire_hook(
-                    self.on_count_down, 0, self._taking_break.duration
-                )
+                self.__fire_hook(self.on_count_down, 0, self._taking_break.duration)
             self.__cycle_break_countdown()
         else:
             if self.scheduled_next_break_time is not None:
@@ -215,12 +211,94 @@ class SafeEyesCore:
         if new_day:
             self.context.session.pop("break", None)
             self._break_queue = BreakQueue.create(self._config, self.context)
+            if self._break_queue is not None and self.has_breaks(BreakType.SHORT_BREAK):
+                if self._break_queue.is_long_break():
+                    self._break_queue.next(BreakType.SHORT_BREAK)
             self.context.state = State.START
             self.paused_time = -1
         elif idle_since is not None:
             self.context.state = State.RESTING
             self.paused_time = idle_since.timestamp()
         self.start()
+
+    def export_progress(self) -> typing.Optional[dict]:
+        """Capture a scheduler checkpoint without firing any lifecycle hooks."""
+        if self._break_queue is None:
+            return None
+        paused = self._paused_timer
+        if paused is None and (not self.running or self._callback is None):
+            return None
+        now = datetime.datetime.now()
+        state = paused.state if paused else self.context.state
+        if state == State.BREAK and self._taking_break is None:
+            state = State.WAITING
+        callback = paused.callback if paused else self._callback
+        return {
+            "queue": self._break_queue.export_progress(),
+            "state": state.name,
+            "callback": callback.__name__,
+            "remaining": paused.remaining
+            if paused
+            else max(0, math.ceil(self._wait_until - now.timestamp())),
+            "since": (paused.since if paused else now).isoformat(),
+            "next_break": self.scheduled_next_break_time.isoformat()
+            if self.scheduled_next_break_time
+            else None,
+            "countdown": self._countdown,
+            "occurrence": self._break_queue.get_break().occurrence_id,
+            "skip_disabled": self.context.skip_button_disabled,
+            "postpone_disabled": self.context.postpone_button_disabled,
+        }
+
+    def restore_progress(self, data: dict) -> None:
+        """Load a frozen checkpoint; the activity controller decides when to resume."""
+        callbacks = {
+            method.__name__: method
+            for method in (
+                self.__do_pre_break,
+                self.__do_start_break,
+                self.__cycle_break_countdown,
+                self.__scheduler_job,
+            )
+        }
+        state = State[data["state"]]
+        callback = callbacks[data["callback"]]
+        allowed = {
+            State.WAITING: (self.__do_pre_break, self.__scheduler_job),
+            State.PRE_BREAK: (self.__do_start_break,),
+            State.BREAK: (self.__cycle_break_countdown,),
+        }
+        if callback not in allowed.get(state, ()):
+            raise ValueError("Saved callback does not match scheduler state")
+        if state not in (State.WAITING, State.PRE_BREAK, State.BREAK):
+            raise ValueError("Invalid saved scheduler state")
+        remaining = data["remaining"]
+        if type(remaining) is not int or not 0 <= remaining <= 31536000:
+            raise ValueError("Invalid saved remaining time")
+        since = datetime.datetime.fromisoformat(data["since"])
+        if since.tzinfo is not None:
+            raise ValueError("Incompatible saved timestamp")
+        countdown = data["countdown"]
+        if state == State.BREAK and (
+            type(countdown) is not int or not 0 <= countdown <= 86400
+        ):
+            raise ValueError("Invalid saved countdown")
+        next_break = datetime.datetime.fromisoformat(data["next_break"])
+        if next_break.tzinfo is not None:
+            raise ValueError("Incompatible saved break timestamp")
+        self._break_queue.restore_progress(data["queue"])
+        self._paused_timer = PausedTimer(state, callback, remaining, since)
+        self._countdown = countdown
+        self._taking_break = (
+            self._break_queue.get_break() if state == State.BREAK else None
+        )
+        self._break_queue.get_break().occurrence_id = data.get("occurrence")
+        self.scheduled_next_break_time = next_break
+        self.context.state = State.RESTING
+        self.context.skip_button_disabled = bool(data.get("skip_disabled", False))
+        self.context.postpone_button_disabled = bool(
+            data.get("postpone_disabled", False)
+        )
 
     def skip(self) -> None:
         """User skipped the break using Skip button."""

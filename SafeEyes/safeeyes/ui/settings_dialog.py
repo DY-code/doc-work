@@ -24,6 +24,8 @@ import gi
 from safeeyes import utility
 from safeeyes.configuration import Config
 from safeeyes.model import PluginDependency
+from safeeyes.surveys import KINDS, TITLES
+from safeeyes.ui.survey_options import SurveyOptionsEditor
 from safeeyes.translations import translate as _
 
 gi.require_version("Gtk", "4.0")
@@ -63,6 +65,7 @@ class SettingsDialog(Gtk.ApplicationWindow):
     box_short_breaks: Gtk.Box = Gtk.Template.Child()
     box_long_breaks: Gtk.Box = Gtk.Template.Child()
     box_plugins: Gtk.Box = Gtk.Template.Child()
+    stack: Gtk.Stack = Gtk.Template.Child()
     popover: Gtk.MenuButton = Gtk.Template.Child()
 
     spin_short_break_duration: Gtk.SpinButton = Gtk.Template.Child()
@@ -70,6 +73,7 @@ class SettingsDialog(Gtk.ApplicationWindow):
     spin_short_break_interval: Gtk.SpinButton = Gtk.Template.Child()
     spin_long_break_interval: Gtk.SpinButton = Gtk.Template.Child()
     spin_time_to_prepare: Gtk.SpinButton = Gtk.Template.Child()
+    spin_away_reset: Gtk.SpinButton = Gtk.Template.Child()
     spin_postpone_duration: Gtk.SpinButton = Gtk.Template.Child()
     spin_fade_in_break_screen_duration: Gtk.SpinButton = Gtk.Template.Child()
     dropdown_postpone_unit: Gtk.DropDown = Gtk.Template.Child()
@@ -105,6 +109,8 @@ class SettingsDialog(Gtk.ApplicationWindow):
 
         # Set the current values of input fields
         self.__initialize(config)
+        self.survey_editor = SurveyOptionsEditor(config)
+        self.stack.add_titled(self.survey_editor, "survey-options", "询问选项")
 
         self.initializing = False
 
@@ -124,6 +130,7 @@ class SettingsDialog(Gtk.ApplicationWindow):
         self.spin_short_break_interval.set_value(config.get("short_break_interval"))
         self.spin_long_break_interval.set_value(config.get("long_break_interval"))
         self.spin_time_to_prepare.set_value(config.get("pre_break_warning_time"))
+        self.spin_away_reset.set_value(config.get("away_reset_minutes", 120))
         self.spin_postpone_duration.set_value(config.get("postpone_duration"))
         self.spin_fade_in_break_screen_duration.set_value(
             config.get("fade_in_break_screen_duration", 1500)
@@ -238,9 +245,7 @@ class SettingsDialog(Gtk.ApplicationWindow):
         ok_btn = Gtk.Button(label=ok_label)
         ok_btn.add_css_class("destructive-action")
         cancel_btn.connect("clicked", lambda b: dialog.close())
-        ok_btn.connect(
-            "clicked", lambda b: (on_confirm(), dialog.close())
-        )
+        ok_btn.connect("clicked", lambda b: (on_confirm(), dialog.close()))
         btn_box.append(cancel_btn)
         btn_box.append(ok_btn)
         box.append(btn_box)
@@ -371,6 +376,9 @@ class SettingsDialog(Gtk.ApplicationWindow):
     @Gtk.Template.Callback()
     def on_window_delete(self, *args) -> None:
         """Event handler for Settings dialog close action."""
+        if not self.survey_editor.save():
+            self.stack.set_visible_child(self.survey_editor)
+            return True
         self.config.set(
             "short_break_duration", self.spin_short_break_duration.get_value_as_int()
         )
@@ -412,6 +420,7 @@ class SettingsDialog(Gtk.ApplicationWindow):
             "fade_in_break_screen", self.switch_fade_in_break_screen.get_active()
         )
         self.config.set("persist_state", self.switch_persist.get_active())
+        self.config.set("away_reset_minutes", self.spin_away_reset.get_value_as_int())
         for plugin in self.config.get("plugins"):
             if plugin["id"] in self.plugin_items:
                 plugin["enabled"] = self.plugin_items[plugin["id"]].is_enabled()
@@ -627,7 +636,7 @@ class BreakSettingsDialog(Gtk.Window):
     switch_override_interval: Gtk.Switch = Gtk.Template.Child()
     switch_override_duration: Gtk.Switch = Gtk.Template.Child()
     switch_override_plugins: Gtk.Switch = Gtk.Template.Child()
-    switch_distraction_stats: Gtk.Switch = Gtk.Template.Child()
+    dropdown_question_type: Gtk.DropDown = Gtk.Template.Child()
     spin_interval: Gtk.SpinButton = Gtk.Template.Child()
     spin_duration: Gtk.SpinButton = Gtk.Template.Child()
     btn_image: Gtk.Button = Gtk.Template.Child()
@@ -665,8 +674,13 @@ class BreakSettingsDialog(Gtk.Window):
         self.switch_override_interval.set_active(interval_overriden)
         self.switch_override_duration.set_active(duration_overriden)
         self.switch_override_plugins.set_active(plugins_overriden)
-        self.switch_distraction_stats.set_active(
-            break_config.get("distraction_stats", False)
+        self.dropdown_question_type.set_model(Gtk.StringList.new(list(TITLES)))
+        kind = break_config.get(
+            "question_type",
+            "distraction" if break_config.get("distraction_stats") else "none",
+        )
+        self.dropdown_question_type.set_selected(
+            KINDS.index(kind) if kind in KINDS else 0
         )
         self.cmb_type.set_active(0 if is_short else 1)
 
@@ -777,9 +791,9 @@ class BreakSettingsDialog(Gtk.Window):
     def on_window_delete(self, *args) -> None:
         """Event handler for Properties dialog close action."""
         break_name = self.txt_break.get_text().strip()
-        self.break_config["distraction_stats"] = (
-            self.switch_distraction_stats.get_active()
-        )
+        kind = KINDS[self.dropdown_question_type.get_selected()]
+        self.break_config["question_type"] = kind
+        self.break_config["distraction_stats"] = kind == "distraction"
         if break_name:
             self.break_config["name"] = break_name
         if self.switch_override_interval.get_active():
@@ -849,7 +863,9 @@ class NewBreakDialog(Gtk.Window):
     def save(self, button) -> None:
         """Event handler for Properties dialog close action."""
         break_config = {
-            "name": self.txt_break.get_text().strip(), "distraction_stats": False
+            "name": self.txt_break.get_text().strip(),
+            "distraction_stats": False,
+            "question_type": "none",
         }
 
         if self.cmb_type.get_active() == 0:

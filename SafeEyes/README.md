@@ -48,6 +48,20 @@ screen locking, and display power saving. It resumes with the remaining time
 only after all pause conditions have cleared. Display power is checked once
 per second. This works even when the Smart Pause plugin is disabled.
 
+The general settings include **离开多久后重置休息周期（分钟）**, defaulting to
+120 minutes. Continuous locking, display power saving, suspend, hibernation,
+and shutdown count toward this threshold, with overlapping states counted once.
+On returning after the threshold, a full short-break interval starts and long-break
+progress resets. Shorter same-day absences keep the remaining interval and queue
+progress. Unlocking or rebooting into a still-locked session does not start work time.
+
+`timer_progress.json` in the Safe Eyes configuration directory saves scheduler
+progress independently of the optional session-saving switch. It is updated on
+state changes, before shutdown, and every 30 seconds. A real reboot is distinguished
+from explicitly quitting and reopening the application. Sudden power loss recovers
+the most recent checkpoint (up to about 30 seconds of progress may be lost).
+Changed break configuration or an unreadable checkpoint starts a fresh schedule.
+
 Time spent away counts toward a break already in progress. On the first resume
 or application start on a new local calendar day, a full work interval starts
 with a fresh break queue. Continuous use through midnight does not reset it.
@@ -56,24 +70,31 @@ and manual disabling takes precedence over automatic resume.
 
 These changes take effect after restarting Safe Eyes from this checkout.
 
-## Distraction statistics in this checkout
+## Self-report statistics in this checkout
 
-Each break's settings has an **启用分心统计** switch. On the first run of this
-version, the existing “你分心了吗？” question is enabled; other and newly created
-breaks default to off. Renaming a break preserves its switch. “是” always means
-distracted and “否” means not distracted, regardless of the reminder's wording.
+Open **休息 → a break's properties → 询问类型** to choose exactly one of:
+none, distraction, posture, body tension, or mental fatigue. Existing distraction
+opt-ins migrate automatically; other breaks default to none. Renaming a reminder
+preserves its selected inquiry type.
 
-Enabled reminders show the two answer buttons and today's counts and percentage.
-An unanswered reminder is excluded. Each break accepts one answer shared across
-all monitors, including after sleep or lock-screen restoration; the normal break
-countdown continues. All enabled breaks contribute to the same daily totals.
+Open the **询问选项** tab in the main settings to add, rename, reorder, or delete
+choices shared by each category. Defaults are yes/no, good/bad posture,
+relaxed/tense, and alert/tired. Keep at least two nonempty, distinct active choices.
+Closing the main settings saves the choices. Deleted choices keep their identity
+and historical counts and are labeled “已停用” in today's summary; re-adding the
+same wording creates a new identity. No scores or averages are calculated.
 
-Counts are saved immediately to `distraction_stats.json` in the Safe Eyes config
-directory (normally `~/.config/safeeyes/`), independently of session persistence.
-Disabling or deleting a break does not delete its accumulated counts. New calendar
-days show new totals; previous days remain in the file. There is no history UI.
+Enabled reminders show only their category's daily counts and option percentages.
+Unanswered reminders are excluded. One answer is shared across all monitors and
+pause/reboot restoration, and the regular break countdown continues. Multiple
+breaks of the same category contribute to the same totals. There is no history UI.
 
-Restart this checkout to load the new controls and initialize existing settings.
+`health_stats.json` in the Safe Eyes config directory (normally
+`~/.config/safeeyes/`) stores daily counts independently of session persistence.
+Existing `distraction_stats.json` data is imported on the first new answer;
+the original file is preserved. Disabled/deleted breaks do not delete statistics.
+Unreadable files are preserved and saving errors allow retry rather than silently
+marking an answer as recorded. Restart this checkout to load the new controls.
 
 ## Installation guide
 

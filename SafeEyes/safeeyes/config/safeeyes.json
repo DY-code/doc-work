@@ -10,6 +10,25 @@
     "pre_break_warning_time": 10,
     "short_break_duration": 15,
     "persist_state": false,
+    "away_reset_minutes": 120,
+    "survey_options": {
+        "distraction": [
+            {"id": "yes", "label": "是", "active": true},
+            {"id": "no", "label": "否", "active": true}
+        ],
+        "posture": [
+            {"id": "good", "label": "良好", "active": true},
+            {"id": "bad", "label": "不良", "active": true}
+        ],
+        "tension": [
+            {"id": "relaxed", "label": "放松", "active": true},
+            {"id": "tense", "label": "紧绷", "active": true}
+        ],
+        "fatigue": [
+            {"id": "alert", "label": "清醒", "active": true},
+            {"id": "tired", "label": "疲劳", "active": true}
+        ]
+    },
     "distraction_stats_migrated": false,
     "postpone_duration": 5,
     "postpone_unit": "minutes",
