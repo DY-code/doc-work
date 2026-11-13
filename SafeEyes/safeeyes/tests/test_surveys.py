@@ -33,6 +33,105 @@ def test_settings_migration_retains_opt_in_and_is_idempotent():
     assert len(config["survey_options"]) == 4
 
 
+@pytest.mark.parametrize("upgrade", [False, True])
+def test_archived_builtin_survives_reload_and_upgrade(tmp_path, monkeypatch, upgrade):
+    from safeeyes import utility
+    from safeeyes.configuration import Config
+    from safeeyes.surveys import question_choices
+
+    data = utility.load_json(utility.SYSTEM_CONFIG_FILE_PATH)
+    data["survey_archived"] = ["distraction"]
+    data["short_breaks"] = [{"name": "旧提醒", "distraction_stats": True}]
+    if upgrade:
+        data["meta"]["config_version"] = "0.0.1"
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(data))
+    monkeypatch.setattr(utility, "CONFIG_FILE_PATH", str(path))
+    monkeypatch.setattr(utility, "merge_plugins", lambda config: None)
+    monkeypatch.setattr(Config, "_create_startup_entry", lambda **kwargs: None)
+    loaded = Config.load()
+    assert loaded.get("short_breaks")[0]["question_type"] == "none"
+    assert loaded.get("short_breaks")[0]["distraction_stats"] is False
+    assert "distraction" in loaded.get("survey_options")
+    assert "distraction" in loaded.get("survey_questions")
+    assert "distraction" not in dict(question_choices(loaded))
+    prompt = SurveyPrompt(SurveyStore(tmp_path / "stats.json"))
+    prompt.configure(
+        loaded.get("survey_options"),
+        loaded.get("survey_questions"),
+        loaded.get("survey_archived"),
+    )
+    prompt.begin("one", True, "distraction")
+    assert not prompt.enabled
+
+
+def test_custom_question_and_renaming_keep_statistical_identity(tmp_path):
+    catalog = default_options()
+    catalog["custom_neck"] = [
+        {"id": "none", "label": "无", "active": True},
+        {"id": "mild", "label": "轻微", "active": True},
+        {"id": "severe", "label": "明显", "active": True},
+    ]
+    store = SurveyStore(tmp_path / "stats.json")
+    prompt = SurveyPrompt(store)
+    prompt.configure(catalog, {"custom_neck": "颈肩是否不舒服？"})
+    prompt.begin("one", True, "custom_neck")
+    assert prompt.enabled
+    assert prompt.question == "颈肩是否不舒服？"
+    prompt.submit("one", "mild")
+    restored = SurveyPrompt(store)
+    restored.configure(catalog, {"custom_neck": "你的颈肩感觉如何？"})
+    restored.begin("two", True, "custom_neck")
+    assert restored.question == "你的颈肩感觉如何？"
+    assert "轻微 1 次" in restored.summary()
+    restored.submit("two", "none")
+    assert store.today("custom_neck") == {"mild": 1, "none": 1}
+
+
+def test_guidance_is_randomized_once_only_after_successful_answer(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import Mock
+
+    choose = Mock(side_effect=lambda phrases: phrases[-1])
+    monkeypatch.setattr("safeeyes.surveys.random.choice", choose)
+    catalog = default_options()
+    catalog["tension"][1]["guidance"] = ["放松肩膀", "缓慢呼气\n松开下颌"]
+    prompt = SurveyPrompt(SurveyStore(tmp_path / "stats.json"))
+    prompt.configure(catalog)
+    prompt.begin("one", True, "tension")
+    assert not prompt.guidance
+    prompt.submit("stale", "tense")
+    choose.assert_not_called()
+    with monkeypatch.context() as patch:
+        patch.setattr(prompt.store, "record", Mock(side_effect=OSError("disk full")))
+        with pytest.raises(OSError):
+            prompt.submit("one", "tense")
+    choose.assert_not_called()
+    assert not prompt.guidance
+    prompt.submit("one", "tense")
+    assert prompt.guidance == "缓慢呼气\n松开下颌"
+    prompt.begin("one", True, "tension")
+    prompt.submit("one", "relaxed")
+    choose.assert_called_once_with(["放松肩膀", "缓慢呼气\n松开下颌"])
+    assert prompt.guidance == "缓慢呼气\n松开下颌"
+    prompt.begin("two", True, "tension")
+    assert not prompt.guidance
+    prompt.submit("two", "relaxed")
+    assert not prompt.guidance
+    assert choose.call_count == 1
+
+
+def test_one_guidance_phrase_and_option_rename_keep_the_association(tmp_path):
+    catalog = default_options()
+    catalog["posture"][1].update(label="需要调整", guidance=["坐正，放松肩膀"])
+    prompt = SurveyPrompt(SurveyStore(tmp_path / "stats.json"))
+    prompt.configure(catalog)
+    prompt.begin("one", True, "posture")
+    prompt.submit("one", "bad")
+    assert prompt.guidance == "坐正，放松肩膀"
+
+
 def test_legacy_import_preserves_all_days_and_never_imports_twice(
     tmp_path, time_machine
 ):
@@ -128,6 +227,9 @@ def test_custom_choices_survive_configuration_version_upgrade(tmp_path, monkeypa
     data["survey_options"]["fatigue"].append(
         {"id": "custom", "label": "轻度疲劳", "active": True}
     )
+    data["survey_options"]["custom_neck"] = default_options()["distraction"]
+    data["survey_questions"]["custom_neck"] = "颈肩是否不舒服？"
+    data["survey_questions"]["fatigue"] = "你现在累了吗？"
     path = tmp_path / "config.json"
     path.write_text(json.dumps(data))
     monkeypatch.setattr(utility, "CONFIG_FILE_PATH", str(path))
@@ -135,6 +237,9 @@ def test_custom_choices_survive_configuration_version_upgrade(tmp_path, monkeypa
     monkeypatch.setattr(Config, "_create_startup_entry", lambda **kwargs: None)
     loaded = Config.load()
     assert loaded.get("survey_options")["fatigue"][-1]["id"] == "custom"
+    assert "custom_neck" in loaded.get("survey_options")
+    assert loaded.get("survey_questions")["custom_neck"] == "颈肩是否不舒服？"
+    assert loaded.get("survey_questions")["fatigue"] == "你现在累了吗？"
     catalog = default_options()
     catalog["posture"][0]["label"] = "不良"
     with pytest.raises(ValueError):
@@ -161,6 +266,9 @@ def test_categorical_answer_survives_progress_checkpoint_restore(timer, tmp_path
     token = timer.core._taking_break.occurrence_id
     store = SurveyStore(tmp_path / "stats.json")
     prompt = SurveyPrompt(store)
+    catalog = default_options()
+    catalog["posture"][1]["guidance"] = ["坐正后放松肩膀\n保持自然呼吸"]
+    prompt.configure(catalog)
     prompt.begin(token, True, "posture")
     prompt.submit(token, "bad")
     path = tmp_path / "timer.json"
@@ -178,5 +286,6 @@ def test_categorical_answer_survives_progress_checkpoint_restore(timer, tmp_path
     ).restore()
     restored.begin(timer.core._taking_break.occurrence_id, True, "posture")
     assert restored.answer == "bad"
+    assert restored.guidance == "坐正后放松肩膀\n保持自然呼吸"
     restored.submit(token, "good")
     assert store.today("posture") == {"bad": 1}

@@ -112,6 +112,11 @@ class Config:
             if key in old_dict:
                 new_value = new_dict[key]
                 old_value = old_dict[key]
+                if key in ("survey_options", "survey_questions") and isinstance(
+                    old_value, dict
+                ):
+                    new_dict[key] = copy.deepcopy(old_value)
+                    continue
                 if type(new_value) is type(old_value):
                     # Both properties have same type
                     if isinstance(new_value, dict):

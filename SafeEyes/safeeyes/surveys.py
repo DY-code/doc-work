@@ -4,6 +4,7 @@ import copy
 import datetime
 import json
 import os
+import random
 from pathlib import Path
 import tempfile
 
@@ -15,6 +16,23 @@ DEFAULTS = {
     "tension": [("relaxed", "放松"), ("tense", "紧绷")],
     "fatigue": [("alert", "清醒"), ("tired", "疲劳")],
 }
+QUESTIONS = {
+    "distraction": "你分心了吗？",
+    "posture": "你当前坐姿如何？",
+    "tension": "你现在身体紧绷吗？",
+    "fatigue": "你现在精神疲劳吗？",
+}
+
+
+def question_choices(config):
+    catalog = config.get("survey_options") or default_options()
+    names = config.get("survey_questions") or QUESTIONS
+    keys = [key for key in DEFAULTS if key in catalog]
+    keys.extend(key for key in catalog if key not in DEFAULTS)
+    archived = set(config.get("survey_archived") or [])
+    return [("none", "无")] + [
+        (key, names.get(key, key)) for key in keys if key not in archived
+    ]
 
 
 def default_options():
@@ -29,17 +47,30 @@ def migrate_surveys(config):
     catalog = config.setdefault("survey_options", {})
     for kind, options in default_options().items():
         catalog.setdefault(kind, options)
+    names = config.setdefault("survey_questions", {})
+    archived = set(config.setdefault("survey_archived", []))
+    for kind in catalog:
+        names.setdefault(kind, QUESTIONS.get(kind, kind))
     for group in ("short_breaks", "long_breaks"):
         for item in config.get(group, []):
             item.setdefault(
                 "question_type",
                 "distraction" if item.get("distraction_stats") else "none",
             )
+            if item["question_type"] in archived:
+                item["question_type"] = "none"
+                item["distraction_stats"] = False
 
 
 def validate_options(catalog):
-    for kind in DEFAULTS:
+    for kind in catalog:
         options = catalog[kind]
+        for item in options:
+            guidance = item.get("guidance", [])
+            if not isinstance(guidance, list) or any(
+                not isinstance(text, str) for text in guidance
+            ):
+                raise ValueError("引导标语必须是文字列表。")
         active = [item for item in options if item.get("active", True)]
         ids = [item["id"] for item in options]
         labels = [item["label"].strip() for item in active]
@@ -123,14 +154,24 @@ class SurveyPrompt:
     def __init__(self, store):
         self.store = store
         self.catalog = default_options()
+        self.questions = dict(QUESTIONS)
         self.token = None
         self.answer = None
         self.kind = "none"
         self.enabled = False
         self.error = ""
+        self.guidance = ""
 
-    def configure(self, catalog):
+    def configure(self, catalog, questions=None, archived=None):
         self.catalog = copy.deepcopy(catalog or default_options())
+        for kind in archived or []:
+            self.catalog.pop(kind, None)
+        self.questions = dict(QUESTIONS)
+        self.questions.update(questions or {})
+
+    @property
+    def question(self):
+        return self.questions.get(self.kind, self.kind)
 
     @property
     def choices(self):
@@ -144,9 +185,10 @@ class SurveyPrompt:
         if token != self.token:
             self.answer = None
             self.error = ""
+            self.guidance = ""
         self.token = token
         self.kind = kind
-        self.enabled = enabled and kind in DEFAULTS
+        self.enabled = enabled and kind in self.catalog
         if type(self.answer) is bool and kind == "distraction":
             self.answer = "yes" if self.answer else "no"
 
@@ -162,6 +204,9 @@ class SurveyPrompt:
             raise
         self.answer = answer
         self.error = ""
+        option = next(item for item in self.catalog[self.kind] if item["id"] == answer)
+        phrases = [text.strip() for text in option.get("guidance", []) if text.strip()]
+        self.guidance = random.choice(phrases) if phrases else ""
 
     def answer_label(self):
         return next(

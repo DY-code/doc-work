@@ -24,7 +24,7 @@ import gi
 from safeeyes import utility
 from safeeyes.configuration import Config
 from safeeyes.model import PluginDependency
-from safeeyes.surveys import KINDS, TITLES
+from safeeyes.surveys import question_choices
 from safeeyes.ui.survey_options import SurveyOptionsEditor
 from safeeyes.translations import translate as _
 
@@ -65,6 +65,7 @@ class SettingsDialog(Gtk.ApplicationWindow):
     box_short_breaks: Gtk.Box = Gtk.Template.Child()
     box_long_breaks: Gtk.Box = Gtk.Template.Child()
     box_plugins: Gtk.Box = Gtk.Template.Child()
+    box_surveys: Gtk.Box = Gtk.Template.Child()
     stack: Gtk.Stack = Gtk.Template.Child()
     popover: Gtk.MenuButton = Gtk.Template.Child()
 
@@ -110,7 +111,7 @@ class SettingsDialog(Gtk.ApplicationWindow):
         # Set the current values of input fields
         self.__initialize(config)
         self.survey_editor = SurveyOptionsEditor(config)
-        self.stack.add_titled(self.survey_editor, "survey-options", "询问选项")
+        self.box_surveys.append(self.survey_editor)
 
         self.initializing = False
 
@@ -305,6 +306,9 @@ class SettingsDialog(Gtk.ApplicationWindow):
         on_remove: typing.Callable[[], None],
     ) -> None:
         """Show the BreakProperties dialog."""
+        if not self.survey_editor.save():
+            self.stack.set_visible_child_name("survey-options")
+            return
         dialog = BreakSettingsDialog(
             self,
             break_config,
@@ -377,7 +381,7 @@ class SettingsDialog(Gtk.ApplicationWindow):
     def on_window_delete(self, *args) -> None:
         """Event handler for Settings dialog close action."""
         if not self.survey_editor.save():
-            self.stack.set_visible_child(self.survey_editor)
+            self.stack.set_visible_child_name("survey-options")
             return True
         self.config.set(
             "short_break_duration", self.spin_short_break_duration.get_value_as_int()
@@ -674,13 +678,17 @@ class BreakSettingsDialog(Gtk.Window):
         self.switch_override_interval.set_active(interval_overriden)
         self.switch_override_duration.set_active(duration_overriden)
         self.switch_override_plugins.set_active(plugins_overriden)
-        self.dropdown_question_type.set_model(Gtk.StringList.new(list(TITLES)))
+        choices = question_choices(parent_config)
+        self._question_ids = [key for key, label in choices]
+        self.dropdown_question_type.set_model(
+            Gtk.StringList.new([label for key, label in choices])
+        )
         kind = break_config.get(
             "question_type",
             "distraction" if break_config.get("distraction_stats") else "none",
         )
         self.dropdown_question_type.set_selected(
-            KINDS.index(kind) if kind in KINDS else 0
+            self._question_ids.index(kind) if kind in self._question_ids else 0
         )
         self.cmb_type.set_active(0 if is_short else 1)
 
@@ -791,7 +799,7 @@ class BreakSettingsDialog(Gtk.Window):
     def on_window_delete(self, *args) -> None:
         """Event handler for Properties dialog close action."""
         break_name = self.txt_break.get_text().strip()
-        kind = KINDS[self.dropdown_question_type.get_selected()]
+        kind = self._question_ids[self.dropdown_question_type.get_selected()]
         self.break_config["question_type"] = kind
         self.break_config["distraction_stats"] = kind == "distraction"
         if break_name:

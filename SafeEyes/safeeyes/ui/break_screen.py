@@ -30,7 +30,7 @@ from safeeyes import utility
 from safeeyes.configuration import Config
 from safeeyes.context import Context
 from safeeyes.distraction import DistractionPrompt
-from safeeyes.surveys import KINDS, TITLES, SurveyPrompt, SurveyStore
+from safeeyes.surveys import SurveyPrompt, SurveyStore
 from safeeyes.model import Break, TrayAction
 from safeeyes.translations import translate as _
 
@@ -114,7 +114,11 @@ class BreakScreen:
             "fade_in_break_screen_duration", 1500
         )
         self.strict_break = config.get("strict_break", False)
-        self.distraction.configure(config.get("survey_options"))
+        self.distraction.configure(
+            config.get("survey_options"),
+            config.get("survey_questions"),
+            config.get("survey_archived"),
+        )
 
     def skip_break(self) -> None:
         """Skip the break from the break screen."""
@@ -413,7 +417,9 @@ class BreakScreenWindow(Gtk.Window):
 
     __gtype_name__ = "BreakScreenWindow"
 
-    grid1: Gtk.Grid = Gtk.Template.Child()
+    grid1: Gtk.Box = Gtk.Template.Child()
+    content_scroll: Gtk.ScrolledWindow = Gtk.Template.Child()
+    content_column: Gtk.Box = Gtk.Template.Child()
     lbl_message: Gtk.Label = Gtk.Template.Child()
     lbl_count: Gtk.Label = Gtk.Template.Child()
     lbl_widget: Gtk.Label = Gtk.Template.Child()
@@ -446,6 +452,14 @@ class BreakScreenWindow(Gtk.Window):
         super().__init__(application=application)
 
         self.on_close = on_close
+        # Monitor geometry is in GTK logical pixels, including display scaling.
+        self._content_width = max(160, min(800, monitor_width - 64))
+        # Fill the viewport's measured width. A centered height-for-width child
+        # can otherwise be measured wide but allocated narrow, clipping its end.
+        self.content_column.set_halign(Gtk.Align.FILL)
+        side_margin = max(24, (monitor_width - self._content_width) // 2)
+        self.content_column.set_margin_start(side_margin)
+        self.content_column.set_margin_end(side_margin)
         # 环境适配：Gtk.ContentFit / set_content_fit 需要 GTK >= 4.10，
         # Ubuntu 22.04 仅 4.6，此处使用 set_can_shrink 保持"按比例缩小适配"行为
         if hasattr(self.img_break, "set_content_fit"):
@@ -501,6 +515,9 @@ class BreakScreenWindow(Gtk.Window):
             self.__set_break_image(image_path, monitor_width, monitor_height)
         self.lbl_message.set_label(message)
         self.lbl_widget.set_markup(widget)
+        self.lbl_widget.set_visible(bool(widget))
+        self.img_break.set_visible(bool(image_path))
+        self.box_buttons.set_visible(bool(self.button_widgets))
         self._distraction = distraction
         self._answer_buttons: list[Gtk.Button] = []
         if distraction is not None and distraction.enabled:
@@ -510,35 +527,65 @@ class BreakScreenWindow(Gtk.Window):
         """Keep response buttons independent of skip/postpone countdown locking."""
         prompt = self._distraction
         if isinstance(prompt, SurveyPrompt):
-            self.box_distraction.append(
-                Gtk.Label(label=f"{TITLES[KINDS.index(prompt.kind)]}：请选择当前状态")
-            )
-        row = Gtk.FlowBox(
-            selection_mode=Gtk.SelectionMode.NONE,
-            max_children_per_line=3,
-            min_children_per_line=1,
-            column_spacing=12,
-            row_spacing=12,
-            halign=Gtk.Align.CENTER,
+            question = self._survey_label(prompt.question, "survey_question")
+            self.box_distraction.append(question)
+        row = Gtk.Grid(
+            column_spacing=8,
+            row_spacing=8,
+            column_homogeneous=True,
+            hexpand=True,
         )
+        self._answer_grid = row
+        columns = max(1, min(3, self._content_width // 240))
         token = prompt.token
         choices = getattr(prompt, "choices", (("是", True), ("否", False)))
+        if all(len(label) <= 8 for label, value in choices):
+            row.set_column_homogeneous(False)
+            row.set_hexpand(False)
+            row.set_halign(Gtk.Align.CENTER)
         self._choice_values = [value for label, value in choices]
-        for label, answer in choices:
-            button = Gtk.Button(label=label)
-            button.set_size_request(100, 44)
+        for index, (label, answer) in enumerate(choices):
+            short_label = len(label) <= 8
+            button = Gtk.Button(
+                hexpand=not short_label,
+                halign=Gtk.Align.CENTER if short_label else Gtk.Align.FILL,
+            )
+            text = self._survey_label(label, "survey_answer_text")
+            text.set_max_width_chars(18)
+            text.set_wrap(not short_label)
+            button.set_child(text)
+            button.add_css_class("survey_answer")
+            button.set_size_request(-1, 32)
             button.connect(
                 "clicked", lambda button, value: on_answer(token, value), answer
             )
-            row.insert(button, -1)
+            row.attach(button, index % columns, index // columns, 1, 1)
             self._answer_buttons.append(button)
         self.box_distraction.append(row)
-        self._answer_label = Gtk.Label()
-        self._summary_label = Gtk.Label(wrap=True, max_width_chars=65)
+        self._answer_label = self._survey_label("", "survey_note")
+        self._guidance_label = self._survey_label("", "survey_guidance")
+        self._summary_label = self._survey_label("", "survey_summary")
         self.box_distraction.append(self._answer_label)
+        self.box_distraction.append(self._guidance_label)
         self.box_distraction.append(self._summary_label)
         self.box_distraction.set_visible(True)
         self.refresh_distraction()
+
+    @staticmethod
+    def _survey_label(text, css_class):
+        """Wrap every user-controlled string without forcing a wider window."""
+        from gi.repository import Pango
+
+        label = Gtk.Label(
+            label=text,
+            wrap=True,
+            wrap_mode=Pango.WrapMode.WORD_CHAR,
+            justify=Gtk.Justification.CENTER,
+            max_width_chars=48,
+            hexpand=True,
+        )
+        label.add_css_class(css_class)
+        return label
 
     def refresh_distraction(self) -> None:
         """Reflect the shared answer and today's totals on this monitor."""
@@ -558,7 +605,11 @@ class BreakScreenWindow(Gtk.Window):
             self._answer_label.set_text(f"已记录：{answer}")
         else:
             self._answer_label.set_text(prompt.error)
-        self._summary_label.set_text(prompt.summary())
+        self._answer_label.set_visible(bool(self._answer_label.get_text()))
+        guidance = getattr(prompt, "guidance", "") if prompt.answer is not None else ""
+        self._guidance_label.set_text(guidance)
+        self._guidance_label.set_visible(bool(guidance))
+        self._summary_label.set_text(prompt.summary().replace(" · ", "\n"))
 
     def configure_opacity(self, target_opacity: float, fade_in_enabled: bool) -> None:
         self.fade_in_target_opacity = target_opacity
@@ -619,7 +670,7 @@ class BreakScreenWindow(Gtk.Window):
         self, image_path: str, monitor_width: int, monitor_height: int
     ) -> None:
         """Load the break image and cap it relative to the current monitor size."""
-        max_width = max(1, (monitor_width * 8) // 10 - 1)
+        max_width = min(self._content_width, max(1, (monitor_width * 8) // 10 - 1))
         max_height = max(1, (monitor_height * 3) // 10 - 1)
 
         try:

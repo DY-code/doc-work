@@ -72,19 +72,44 @@ These changes take effect after restarting Safe Eyes from this checkout.
 
 ## Self-report statistics in this checkout
 
-Open **休息 → a break's properties → 询问类型** to choose exactly one of:
-none, distraction, posture, body tension, or mental fatigue. Existing distraction
+Open **休息 → a break's properties → 询问类型** to choose none or exactly one
+inquiry, including your custom inquiries. Existing distraction
 opt-ins migrate automatically; other breaks default to none. Renaming a reminder
 preserves its selected inquiry type.
 
-Open the **询问选项** tab in the main settings to add, rename, reorder, or delete
-choices shared by each category. Defaults are yes/no, good/bad posture,
+Open the **询问管理** tab in the main settings. **新增询问项目** creates a new
+inquiry with two default answers. Edit **询问名称 / 问句** to rename either a built-in
+or a custom inquiry. The saved question appears verbatim on the break screen and
+in the break settings selector. Identities remain stable, preserving counts when
+names change. You can also add, rename, reorder, or delete answer choices shared
+by each inquiry. Defaults are yes/no, good/bad posture,
 relaxed/tense, and alert/tired. Keep at least two nonempty, distinct active choices.
 Closing the main settings saves the choices. Deleted choices keep their identity
 and historical counts and are labeled “已停用” in today's summary; re-adding the
 same wording creates a new identity. No scores or averages are calculated.
 
-Enabled reminders show only their category's daily counts and option percentages.
+The inquiry selector has compact **新增** and **删除** actions alongside it.
+The left-aligned **添加回答选项** action sits directly below the answer list.
+Deleting a built-in or custom inquiry first shows how many breaks use it. After
+confirmation those bindings become none. The definition and counts remain archived,
+but the inquiry is hidden from selection and stays deleted after restarts and
+configuration upgrades. Closing the main settings saves the deletion. If all
+inquiries are deleted, **新增** remains available.
+
+Each answer has an **引导标语** button. Its editor supports multiple phrases,
+including multiline text, with Save/Cancel and per-phrase deletion. Save the
+main settings after editing. Once an answer is successfully recorded, one phrase
+is chosen uniformly at random and shown below the recorded answer. Empty lists
+show no guidance; a single phrase is always used. All monitors and sleep/reboot
+restoration keep the same chosen phrase for that occurrence. Guidance does not
+pause, restart or extend the break countdown.
+
+The main settings tabs are ordered Settings, Breaks, **询问管理**, Plugins.
+
+Short response buttons use a compact height of about 32 logical pixels and fit
+their text; longer labels wrap and grow vertically.
+
+Enabled reminders show only their inquiry's daily counts and option percentages.
 Unanswered reminders are excluded. One answer is shared across all monitors and
 pause/reboot restoration, and the regular break countdown continues. Multiple
 breaks of the same category contribute to the same totals. There is no history UI.

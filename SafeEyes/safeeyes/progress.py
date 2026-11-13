@@ -65,7 +65,11 @@ class ProgressFile:
             "idle_since": self.activity.idle_since.isoformat()
             if self.activity.idle_since
             else None,
-            "prompt": {"token": self.prompt.token, "answer": self.prompt.answer}
+            "prompt": {
+                "token": self.prompt.token,
+                "answer": self.prompt.answer,
+                "guidance": getattr(self.prompt, "guidance", ""),
+            }
             if self.prompt
             else None,
         }
@@ -141,6 +145,9 @@ class ProgressFile:
             if answer is None or type(answer) in (bool, str):
                 self.prompt.token = data["prompt"].get("token")
                 self.prompt.answer = answer
+                guidance = data["prompt"].get("guidance", "")
+                if isinstance(guidance, str):
+                    self.prompt.guidance = guidance
         # The artificial reason is cleared only after the real startup states exist.
         activity.reasons.add("offline")
         activity.on_pause()

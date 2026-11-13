@@ -11,6 +11,13 @@
     "short_break_duration": 15,
     "persist_state": false,
     "away_reset_minutes": 120,
+    "survey_archived": [],
+    "survey_questions": {
+        "distraction": "你分心了吗？",
+        "posture": "你当前坐姿如何？",
+        "tension": "你现在身体紧绷吗？",
+        "fatigue": "你现在精神疲劳吗？"
+    },
     "survey_options": {
         "distraction": [
             {"id": "yes", "label": "是", "active": true},

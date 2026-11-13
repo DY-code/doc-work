@@ -142,6 +142,13 @@ def test_away_threshold_setting_defaults_to_two_hours_and_saves_custom_minutes(
     dialog = SettingsDialog(None, config, saved)
     try:
         assert dialog.spin_away_reset.get_value_as_int() == 120
+        pages = dialog.stack.get_pages()
+        assert [pages.get_item(i).get_name() for i in range(pages.get_n_items())] == [
+            "Settings",
+            "page1",
+            "survey-options",
+            "page2",
+        ]
         dialog.spin_away_reset.set_value(45)
         dialog.on_window_delete()
         assert config.get("away_reset_minutes") == 45
@@ -206,6 +213,106 @@ def test_break_question_selector_is_exclusive():
         parent.destroy()
 
 
+def test_add_custom_question_rename_builtin_and_bind_to_break():
+    from safeeyes.ui.survey_options import SurveyOptionsEditor
+
+    item = {"name": "检查颈肩"}
+    config = Config(
+        {
+            "short_breaks": [item],
+            "long_breaks": [],
+            "short_break_interval": 20,
+            "short_break_duration": 30,
+        },
+        {},
+    )
+    editor = SurveyOptionsEditor(config)
+    editor.name_entry.set_text("你刚才走神了吗？")
+    editor.add_question()
+    key = editor.kind
+    editor.name_entry.set_text("颈肩是否不舒服？")
+    editor.rows[0][1].set_text("无")
+    editor.rows[1][1].set_text("明显")
+    assert editor.save()
+    assert config.get("survey_questions")["distraction"] == "你刚才走神了吗？"
+    assert config.get("survey_questions")[key] == "颈肩是否不舒服？"
+    parent = Gtk.Window()
+    dialog = BreakSettingsDialog(parent, item, True, config, {}, Mock(), Mock(), Mock())
+    try:
+        index = dialog._question_ids.index(key)
+        assert (
+            dialog.dropdown_question_type.get_model().get_string(index)
+            == "颈肩是否不舒服？"
+        )
+        dialog.dropdown_question_type.set_selected(index)
+        dialog.on_window_delete()
+        assert item["question_type"] == key
+        assert item["distraction_stats"] is False
+        restored_editor = SurveyOptionsEditor(config.clone())
+        restored_editor.selector.set_selected(restored_editor._kind_ids.index(key))
+        assert restored_editor.name_entry.get_text() == "颈肩是否不舒服？"
+    finally:
+        dialog.destroy()
+        parent.destroy()
+
+
+def test_archive_unbinds_breaks_and_retains_definition_and_counts(tmp_path):
+    from safeeyes.ui.survey_options import SurveyOptionsEditor, QuestionDeleteDialog
+    from safeeyes.surveys import SurveyStore
+
+    short = {"name": "短休息", "distraction_stats": True}
+    long = {"name": "长休息", "question_type": "distraction"}
+    config = Config({"short_breaks": [short], "long_breaks": [long]}, {})
+    editor = SurveyOptionsEditor(config)
+    store = SurveyStore(tmp_path / "stats.json")
+    store.record("distraction", "yes")
+    definition = editor.catalog["distraction"].copy()
+    canceled = QuestionDeleteDialog(
+        None, "分心", 2, lambda: editor.archive_question("distraction")
+    )
+    assert "2 条休息" in canceled.message.get_text()
+    canceled.destroy()
+    assert not editor.archived
+    confirmed = QuestionDeleteDialog(
+        None, "分心", 2, lambda: editor.archive_question("distraction")
+    )
+    confirmed.confirm()
+    assert short["question_type"] == long["question_type"] == "none"
+    assert editor.save()
+    assert editor.catalog["distraction"] == definition
+    assert store.today("distraction") == {"yes": 1}
+    restored = SurveyOptionsEditor(config.clone())
+    assert "distraction" not in restored._kind_ids
+    assert "distraction" in restored.questions
+
+
+def test_deleting_all_questions_then_adding_new_one_and_action_positions():
+    from safeeyes.ui.survey_options import SurveyOptionsEditor
+
+    config = Config({}, {})
+    editor = SurveyOptionsEditor(config)
+    assert editor.selector.get_parent() is editor.project_actions
+    assert editor.selector.get_next_sibling() is editor.new_question_button
+    assert (
+        editor.new_question_button.get_next_sibling() is editor.delete_question_button
+    )
+    assert editor.list_box.get_next_sibling() is editor.add_answer_button
+    assert editor.add_answer_button.get_halign() == Gtk.Align.START
+    for key in list(editor._kind_ids):
+        editor.archive_question(key)
+    assert editor.kind is None
+    assert not editor.delete_question_button.get_sensitive()
+    assert not editor.add_answer_button.get_sensitive()
+    assert editor.new_question_button.get_sensitive()
+    assert editor.save()
+    reopened = SurveyOptionsEditor(config.clone())
+    assert not reopened._kind_ids
+    reopened.add_question()
+    assert reopened.kind.startswith("custom_")
+    assert reopened.save()
+    assert len(reopened._kind_ids) == 1
+
+
 def test_categorical_buttons_support_many_levels_and_one_shared_answer(tmp_path):
     from safeeyes.surveys import SurveyPrompt, SurveyStore, default_options
 
@@ -217,6 +324,7 @@ def test_categorical_buttons_support_many_levels_and_one_shared_answer(tmp_path)
         ]
     )
     prompt = SurveyPrompt(SurveyStore(tmp_path / "stats.json"))
+    catalog["fatigue"][2]["guidance"] = ["闭眼休息一下", "放松身体\n做几次缓慢呼吸"]
     prompt.configure(catalog)
     prompt.begin("one", True, "fatigue")
     windows = []
@@ -253,9 +361,31 @@ def test_categorical_buttons_support_many_levels_and_one_shared_answer(tmp_path)
         for window in windows:
             assert "轻度疲劳" in window._answer_label.get_text()
             assert "100%" in window._summary_label.get_text()
+            assert window._guidance_label.get_text() == prompt.guidance
+            assert window._guidance_label.get_visible()
             assert all(not button.get_sensitive() for button in window._answer_buttons)
         windows[1]._answer_buttons[1].emit("clicked")
         assert prompt.store.today("fatigue") == {"mild": 1}
     finally:
         for window in windows:
             window.destroy()
+
+
+def test_guidance_editor_save_delete_multiline_and_cancel():
+    from safeeyes.ui.guidance_dialog import GuidanceDialog
+
+    option = {"id": "tense", "label": "紧绷", "guidance": ["旧标语"]}
+    saved = Mock()
+    dialog = GuidanceDialog(None, option, saved)
+    dialog.rows[0][1].get_buffer().set_text("慢慢呼气\n放松肩膀")
+    dialog.add_phrase("第二条")
+    dialog.add_phrase("将被删除")
+    dialog.remove_phrase(dialog.rows[-1][0])
+    assert option["guidance"] == ["旧标语"]
+    dialog.save()
+    assert option["guidance"] == ["慢慢呼气\n放松肩膀", "第二条"]
+    saved.assert_called_once()
+    canceled = GuidanceDialog(None, option)
+    canceled.rows[0][1].get_buffer().set_text("未保存的修改")
+    canceled.destroy()
+    assert option["guidance"] == ["慢慢呼气\n放松肩膀", "第二条"]
